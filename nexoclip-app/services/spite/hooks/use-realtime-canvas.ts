@@ -263,6 +263,7 @@ export class RealtimeCanvasRoom {
   private readonly listeners = new Set<() => void>()
   private readonly fetchFn: FetchLike
   private readonly recoveringGenerationKeys = new Set<string>()
+  private hasCompletedInitialSync = false
 
   constructor(
     readonly projectId: string,
@@ -282,7 +283,9 @@ export class RealtimeCanvasRoom {
         ...this.snapshot,
         ...this.binding.getSnapshot(),
       }
-      void this.recoverDurableGenerations()
+      if (this.hasCompletedInitialSync) {
+        void this.recoverDurableGenerations()
+      }
       this.emit()
     })
 
@@ -298,6 +301,7 @@ export class RealtimeCanvasRoom {
       },
       onSynced: ({ state }) => {
         if (state) {
+          this.hasCompletedInitialSync = true
           void this.recoverDurableGenerations()
         }
       },

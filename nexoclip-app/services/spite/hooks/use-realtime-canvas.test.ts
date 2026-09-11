@@ -17,11 +17,20 @@ type SyncableProvider = {
   sync: () => void
 }
 
+type FetchResponse = { generationStatus: string } | Error
+
 function node(id: string, data: Record<string, unknown>): TestNode {
   return { id, data }
 }
 
-function syncedProviderWithNodes(nodes: TestNode[]): (configuration: HocuspocusProviderConfiguration) => SyncableProvider {
+function flush(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
+}
+
+function providerWithNodes(
+  nodes: TestNode[],
+  onSync?: (document: Y.Doc) => void,
+): (configuration: HocuspocusProviderConfiguration) => SyncableProvider {
   return (configuration) => {
     const document = configuration.document as Y.Doc
     for (const entry of nodes) {
@@ -36,21 +45,33 @@ function syncedProviderWithNodes(nodes: TestNode[]): (configuration: HocuspocusP
     return {
       awareness: null,
       destroy: () => {},
-      sync: () => configuration.onSynced?.({ state: true } as never),
+      sync: () => {
+        configuration.onSynced?.({ state: true } as never)
+        onSync?.(document)
+      },
     }
   }
 }
 
-test('requests status once for each in-flight durable media node after sync', async () => {
+function statusFetch(
+  responses: FetchResponse[],
+  fetches: Array<{ url: string; init?: RequestInit }>,
+): (url: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  return async (url, init) => {
+    fetches.push({ url: String(url), init })
+    const response = responses.shift()
+    if (response instanceof Error) throw response
+    return Response.json(response ?? { generationStatus: 'processing' })
+  }
+}
+
+test('defers durable recovery until initial sync and ignores terminal nodes', async () => {
   const fetches: Array<{ url: string; init?: RequestInit }> = []
   let provider: SyncableProvider | undefined
   const room = new RealtimeCanvasRoom('project-1', {
-    fetchFn: async (url, init) => {
-      fetches.push({ url: String(url), init })
-      return Response.json({ generationId: 'g1', generationStatus: 'processing' })
-    },
+    fetchFn: statusFetch([{ generationStatus: 'processing' }], fetches),
     createProvider: (configuration) => {
-      provider = syncedProviderWithNodes([
+      provider = providerWithNodes([
         node('image-1', { generationId: 'g1', generationStatus: 'queued' }),
         node('image-2', { generationId: 'g2', generationStatus: 'completed' }),
       ])(configuration)
@@ -58,15 +79,71 @@ test('requests status once for each in-flight durable media node after sync', as
     },
   })
 
+  assert.equal(fetches.length, 0)
+
   provider?.sync()
-  await Promise.resolve()
-  await room.recoverDurableGenerations()
+  await flush()
 
   assert.equal(fetches.length, 1)
   assert.match(fetches[0].url, /projectId=project-1/)
   assert.match(fetches[0].url, /nodeId=image-1/)
   assert.match(fetches[0].url, /generationId=g1/)
+  assert.doesNotMatch(fetches[0].url, /nodeId=image-2/)
   assert.deepEqual(fetches[0].init, { credentials: 'include' })
 
+  room.destroy()
+})
+
+test('deduplicates concurrent sync and snapshot recovery triggers', async () => {
+  const fetches: Array<{ url: string; init?: RequestInit }> = []
+  let provider: SyncableProvider | undefined
+  const room = new RealtimeCanvasRoom('project-1', {
+    fetchFn: statusFetch([{ generationStatus: 'processing' }], fetches),
+    createProvider: (configuration) => {
+      provider = providerWithNodes(
+        [node('image-1', { generationId: 'g1', generationStatus: 'queued' })],
+        (document) => {
+          upsertNode(document, {
+            id: 'image-1',
+            type: 'imageGen',
+            position: { x: 1, y: 0 },
+            data: { generationId: 'g1', generationStatus: 'queued' },
+          })
+        },
+      )(configuration)
+      return provider
+    },
+  })
+
+  provider?.sync()
+  await flush()
+
+  assert.equal(fetches.length, 1)
+  room.destroy()
+})
+
+test('releases recovery keys after terminal responses and errors', async () => {
+  const fetches: Array<{ url: string; init?: RequestInit }> = []
+  let provider: SyncableProvider | undefined
+  const room = new RealtimeCanvasRoom('project-1', {
+    fetchFn: statusFetch([
+      { generationStatus: 'completed' },
+      new Error('network failure'),
+      { generationStatus: 'processing' },
+    ], fetches),
+    createProvider: (configuration) => {
+      provider = providerWithNodes([
+        node('image-1', { generationId: 'g1', generationStatus: 'queued' }),
+      ])(configuration)
+      return provider
+    },
+  })
+
+  provider?.sync()
+  await flush()
+  await room.recoverDurableGenerations()
+  await room.recoverDurableGenerations()
+
+  assert.equal(fetches.length, 3)
   room.destroy()
 })
