@@ -6,6 +6,7 @@
   }
 
   respond /spite/api/internal/* 404
+  respond /api/internal/* 404
 
   handle /spite/ws* {
     reverse_proxy spite-realtime:3007

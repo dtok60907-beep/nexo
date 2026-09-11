@@ -72,6 +72,11 @@ test('deployment files, routes, and documented realtime env exist', () => {
   assert.match(caddy, /handle \/spite\*/);
   assert.ok(caddy.indexOf('handle /spite/ws') < caddy.indexOf('handle /spite*'));
   assert.match(caddy, /respond \/spite\/api\/internal\/\* 404/);
+  assert.match(caddy, /respond \/api\/internal\/\* 404/);
+  assert.ok(
+    caddy.indexOf('respond /api/internal/* 404') < caddy.indexOf('handle {'),
+    'the public internal API deny must precede the Nexoclip catch-all',
+  );
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/authorize/);
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/document/);
   assert.doesNotMatch(caddy, /handle \/api\/internal\/generations/);
