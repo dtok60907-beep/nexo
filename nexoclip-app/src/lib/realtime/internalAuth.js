@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 export const CANVAS_AUTH_MAX_SKEW_SECONDS = 60;
 
@@ -42,7 +42,7 @@ function canonicalizePayload(payload) {
     throw new Error('Canvas authorization payload is required');
   }
 
-  const { userId, projectId, timestamp, nonce } = payload;
+  const { userId, projectId, timestamp, nonce, actionDigest } = payload;
 
   if (typeof userId !== 'string' || userId.length === 0) {
     throw new Error('Canvas authorization userId is required');
@@ -56,7 +56,25 @@ function canonicalizePayload(payload) {
     throw new Error('Canvas authorization nonce is required');
   }
 
-  return JSON.stringify([userId, projectId, normalizeTimestamp(timestamp), nonce]);
+  const parts = [userId, projectId, normalizeTimestamp(timestamp), nonce];
+  if (actionDigest !== undefined) {
+    if (typeof actionDigest !== 'string' || actionDigest.length === 0) {
+      throw new Error('Canvas authorization actionDigest must be a non-empty string when provided');
+    }
+    parts.push(actionDigest);
+  }
+  return JSON.stringify(parts);
+}
+
+function canonicalizeJson(value) {
+  if (value === null || ['boolean', 'number', 'string'].includes(typeof value)) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalizeJson).join(',')}]`;
+  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${canonicalizeJson(nested)}`).join(',')}}`;
+}
+
+export function createCanvasAuthorizationActionDigest(value) {
+  return createHash('sha256').update(canonicalizeJson(JSON.parse(JSON.stringify(value)))).digest('hex');
 }
 
 export function signCanvasAuthorization(payload, secret) {
