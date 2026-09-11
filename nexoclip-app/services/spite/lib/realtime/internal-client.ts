@@ -5,6 +5,7 @@ import * as Y from 'yjs'
 import {
   importLegacyCanvas,
   readCanvasProjection,
+  upsertNode,
   type CanvasProjection,
 } from '@/lib/realtime/document'
 import {
@@ -44,6 +45,14 @@ export type PatchNodeDataInput = {
   nodeId: string
   set?: Record<string, unknown>
   unset?: string[]
+  /** Apply only if these current node-data values still match. */
+  expected?: Record<string, unknown>
+}
+
+export type CreateNodeInput = {
+  userId: string
+  projectId: string
+  node: CanvasProjection['nodes'][number]
 }
 
 export type ReplaceDocumentInput = {
@@ -70,7 +79,8 @@ type InternalRequestFactoryOptions = {
 
 export type InternalRealtimeClient = {
   exportDocument(input: ExportDocumentInput): Promise<ExportDocumentResult>
-  patchNodeData(input: PatchNodeDataInput): Promise<void>
+  patchNodeData(input: PatchNodeDataInput): Promise<{ applied: boolean }>
+  createNode(input: CreateNodeInput): Promise<void>
   replaceDocument(input: ReplaceDocumentInput): Promise<void>
 }
 
@@ -135,7 +145,7 @@ export function createInternalRealtimeClient(options: InternalRequestFactoryOpti
       })
     },
     async patchNodeData(input) {
-      await request({
+      return request<{ applied: boolean }>({
         userId: input.userId,
         projectId: input.projectId,
         action: 'patch-node-data',
@@ -143,7 +153,16 @@ export function createInternalRealtimeClient(options: InternalRequestFactoryOpti
           nodeId: input.nodeId,
           set: input.set ?? {},
           unset: input.unset ?? [],
+          expected: input.expected ?? {},
         },
+      })
+    },
+    async createNode(input) {
+      await request({
+        userId: input.userId,
+        projectId: input.projectId,
+        action: 'create-node',
+        body: { node: input.node },
       })
     },
     async replaceDocument(input) {
@@ -174,8 +193,17 @@ export function applyInternalDocumentAction(
       nodeId: typeof body.nodeId === 'string' ? body.nodeId : '',
       set: isRecord(body.set) ? body.set : {},
       unset: Array.isArray(body.unset) ? body.unset.filter((value): value is string => typeof value === 'string') : [],
+      expected: isRecord(body.expected) ? body.expected : {},
       origin,
     })
+    return
+  }
+
+  if (action === 'create-node') {
+    const node = body.node
+    if (!isCanvasNode(node)) throw new Error('node is required')
+    if (doc.getMap('nodes').has(node.id)) throw new Error('node already exists')
+    upsertNode(doc, node)
     return
   }
 
@@ -226,11 +254,13 @@ function patchNodeData(
     nodeId,
     set,
     unset,
+    expected,
     origin,
   }: {
     nodeId: string
     set: Record<string, unknown>
     unset: string[]
+    expected: Record<string, unknown>
     origin: unknown
   },
 ): void {
@@ -242,8 +272,11 @@ function patchNodeData(
       return
     }
 
+    const currentData = coerceRecord(node.get('data'))
+    if (Object.entries(expected).some(([key, value]) => currentData[key] !== value && !(value === null && currentData[key] === undefined))) return
+
     const nextData = {
-      ...coerceRecord(node.get('data')),
+      ...currentData,
       ...set,
     }
 
@@ -253,6 +286,14 @@ function patchNodeData(
 
     node.set('data', nextData)
   }, origin)
+}
+
+function isCanvasNode(value: unknown): value is CanvasProjection['nodes'][number] {
+  if (!value || typeof value !== 'object') return false
+  const node = value as CanvasProjection['nodes'][number]
+  return typeof node.id === 'string' && !!node.id && typeof node.type === 'string'
+    && !!node.position && typeof node.position.x === 'number' && typeof node.position.y === 'number'
+    && isRecord(node.data)
 }
 
 function isCanvasProjection(value: unknown): value is CanvasProjection {

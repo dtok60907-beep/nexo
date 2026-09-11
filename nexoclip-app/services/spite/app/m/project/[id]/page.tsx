@@ -178,11 +178,23 @@ export default function FlowThread() {
     try {
       if (i > 0) await new Promise((r) => setTimeout(r, i * 250))
       const m = getModelById(mId)
-      const nodeId = `mobile-${Date.now()}-${i}`
+      const nodeId = `mobile-${crypto.randomUUID()}`
+      const submissionId = crypto.randomUUID()
+      await fetch(withBasePath(`/api/projects/${projectId}/canvas/nodes`), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: nodeId,
+          type: 'imageGen',
+          position: { x: -10000, y: -10000 },
+          data: { mobile: true },
+        }),
+      }).then(async (response) => {
+        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Could not prepare generation')
+      })
       const submitRes = await fetch(withBasePath('/api/generate/submit'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          kind: 'image', mobile: true, model: mId, projectId, nodeId, prompt: myPrompt,
+          kind: 'image', model: mId, projectId, nodeId, submissionId, prompt: myPrompt,
           referenceImageUrl: refUrls[0],
           referenceGroups: refUrls.length > 1 ? refUrls.slice(1).map((u) => ({ urls: [u] })) : undefined,
           settings: { aspectRatio: asp || m?.defaultAspectRatio, resolution: res || m?.defaultResolution },
@@ -209,7 +221,7 @@ export default function FlowThread() {
       const { generationId } = submitData
       for (let k = 0; k < 120; k++) {
         await new Promise((r) => setTimeout(r, 2000))
-        const q = new URLSearchParams({ generationId, nodeId, projectId, mobile: '1' })
+        const q = new URLSearchParams({ generationId, nodeId, projectId })
         const sd = await (await fetch(withBasePath(`/api/generate/status?${q.toString()}`))).json().catch(() => ({}))
         if (sd.generationStatus === 'completed') {
           const url = sd.outputUrl
