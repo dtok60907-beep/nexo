@@ -32,19 +32,22 @@ export class NexoClipGenerationRequestError extends Error {
   }
 }
 
+type NexoClipGenerationClientEnv = Partial<Pick<NodeJS.ProcessEnv,
+  'NEXOCLIP_INTERNAL_URL'
+  | 'CANVAS_AUTH_HMAC_SECRET'>>
+
 type ClientOptions = {
-  env?: Partial<Pick<NodeJS.ProcessEnv, 'NEXOCLIP_INTERNAL_URL' | 'CANVAS_AUTH_HMAC_SECRET'>>
+  env?: NexoClipGenerationClientEnv
   now?: () => number
   createNonce?: () => string
   fetchFn?: typeof fetch
 }
 
-export function createNexoClipGenerationClient({
-  env = process.env,
-  now = () => Math.floor(Date.now() / 1000),
-  createNonce = crypto.randomUUID,
-  fetchFn = fetch,
-}: ClientOptions = {}): NexoClipGenerationClient {
+export function createNexoClipGenerationClient(options: ClientOptions = {}): NexoClipGenerationClient {
+  const env = (options.env ?? process.env) as NexoClipGenerationClientEnv
+  const now = options.now ?? (() => Math.floor(Date.now() / 1000))
+  const createNonce = options.createNonce ?? crypto.randomUUID
+  const fetchFn = options.fetchFn ?? fetch
   const request = async (
     action: 'submit' | 'status',
     input: { userId: string; projectId: string; nodeId: string; input?: DurableGenerationInput; generationId?: string },
