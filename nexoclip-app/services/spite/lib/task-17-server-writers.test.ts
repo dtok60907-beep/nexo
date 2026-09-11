@@ -3,6 +3,8 @@ import test from 'node:test'
 
 import { createAssetRouteHandlers } from '../app/api/assets/[assetId]/route'
 import { createGenerateRecoverHandler } from '../app/api/generate/recover/route'
+import { createGenerateStatusHandler } from '../app/api/generate/status/route'
+import { createGenerateSubmitHandler } from '../app/api/generate/submit/route'
 import { createDuplicateProjectHandler } from '../app/api/projects/[projectId]/duplicate/route'
 import { createCanvasSnapshotRouteHandlers } from '../app/api/projects/[projectId]/canvas/snapshots/route'
 import { createAttachGeneratedMediaToNode } from './r2-upload'
@@ -10,6 +12,24 @@ import { createAttachGeneratedMediaToNode } from './r2-upload'
 const OWNER_ID = '550e8400-e29b-41d4-a716-446655440001'
 const PROJECT_ID = '550e8400-e29b-41d4-a716-446655440000'
 const SNAPSHOT_ID = '550e8400-e29b-41d4-a716-446655440099'
+
+function canvasWithNode(id: string, type = 'imageGen', data: Record<string, unknown> = {}) {
+  return {
+    nodes: [{ id, type, position: { x: 0, y: 0 }, data }],
+    edges: [],
+    scenes: [{ id: 'scene-1', name: 'Scene 1' }],
+    activeSceneId: 'scene-1',
+  }
+}
+
+function ownedProjectSql() {
+  return (async (strings: TemplateStringsArray) => {
+    if (strings.join(' ').replace(/\s+/g, ' ').toLowerCase().includes('select 1 from projects where id =')) {
+      return [{ ok: 1 }]
+    }
+    throw new Error(`Unhandled SQL: ${strings.join(' ')}`)
+  }) as any
+}
 
 function makeRequest(url: string, {
   method = 'GET',
@@ -29,6 +49,83 @@ function makeRequest(url: string, {
   request.nextUrl = new URL(url)
   return request
 }
+
+test('submits an owned image node as a durable NexoClip generation and patches its id', async () => {
+  const patches: unknown[] = []
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => ({ id: 'generation-1', kind: 'image', status: 'queued' }),
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: canvasWithNode('node-1'), durableSeq: 1, projectedSeq: 1 }),
+      patchNodeData: async (patch: unknown) => { patches.push(patch) },
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: { projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1', settings: {} },
+  }))
+
+  assert.equal(response.status, 202)
+  assert.deepEqual(patches[0], {
+    userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
+    set: { generationId: 'generation-1', generationStatus: 'queued', generationError: null },
+  })
+})
+
+test('writes a successful durable generation result to the owned canvas node once', async () => {
+  const patches: unknown[] = []
+  const handler = createGenerateStatusHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      status: async () => ({
+        id: 'g1', kind: 'image', status: 'succeeded',
+        outputs: [{ assetId: 'a', download: { url: '/api/assets/a/download' } }],
+      }),
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: canvasWithNode('node-1', 'imageGen', { generationId: 'g1', generationStatus: 'processing' }), durableSeq: 1, projectedSeq: 1 }),
+      patchNodeData: async (patch: unknown) => { patches.push(patch) },
+    }) as any,
+  })
+
+  const response = await handler(makeRequest(`http://spite.local/api/generate/status?projectId=${PROJECT_ID}&nodeId=node-1&generationId=g1`))
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(patches[0], {
+    userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
+    set: { generationStatus: 'completed', outputUrl: '/api/assets/a/download', status: 'completed', error: null, generationError: null },
+  })
+})
+
+test('does not overwrite a completed node during a repeated terminal poll', async () => {
+  const patches: unknown[] = []
+  const handler = createGenerateStatusHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      status: async () => ({
+        id: 'g1', kind: 'image', status: 'succeeded',
+        outputs: [{ assetId: 'a', download: { url: '/api/assets/a/download' } }],
+      }),
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: canvasWithNode('node-1', 'imageGen', {
+        generationId: 'g1', generationStatus: 'completed', outputUrl: '/api/assets/a/download', status: 'completed', error: null, generationError: null,
+      }), durableSeq: 1, projectedSeq: 1 }),
+      patchNodeData: async (patch: unknown) => { patches.push(patch) },
+    }) as any,
+  })
+
+  const response = await handler(makeRequest(`http://spite.local/api/generate/status?projectId=${PROJECT_ID}&nodeId=node-1&generationId=g1`))
+
+  assert.equal(response.status, 200)
+  assert.equal(patches.length, 0)
+})
 
 test('attachGeneratedMediaToNode routes generation completion through authoritative realtime patching', async () => {
   const calls: unknown[] = []

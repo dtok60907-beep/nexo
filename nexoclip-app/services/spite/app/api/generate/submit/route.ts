@@ -1,39 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { buildModelInput, getModelById } from '@/lib/fal-models'
-import { generateImage, submitVideo } from '@/lib/providers'
-import { attachGeneratedMediaToNode, recordAsset, rehostToR2, toFalFetchableUrl } from '@/lib/r2-upload'
+
 import { getDb } from '@/lib/db'
+import {
+  createNexoClipGenerationClient,
+  type NexoClipGenerationClient,
+} from '@/lib/nexoclip-generation-client'
+import { createQueuedGenerationPatch } from '@/lib/durable-generation'
 import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   projectNotFoundResponse,
   unauthorizedResponse,
   userOwnsProject,
 } from '@/lib/project-ownership'
+import {
+  createInternalRealtimeClient,
+  type InternalRealtimeClient,
+} from '@/lib/realtime/internal-client'
 
 interface GenerateSubmitDeps {
   getDb?: typeof getDb
   getAuthenticatedUser?: typeof getAuthenticatedUser
-  getModelById?: typeof getModelById
-  buildModelInput?: typeof buildModelInput
-  generateImage?: typeof generateImage
-  submitVideo?: typeof submitVideo
-  toFalFetchableUrl?: typeof toFalFetchableUrl
-  rehostToR2?: typeof rehostToR2
-  recordAsset?: typeof recordAsset
-  attachGeneratedMediaToNode?: typeof attachGeneratedMediaToNode
+  createNexoClipGenerationClient?: () => NexoClipGenerationClient
+  createInternalRealtimeClient?: () => InternalRealtimeClient
 }
 
 export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
   const db = deps.getDb ?? getDb
   const resolveUser = deps.getAuthenticatedUser ?? getAuthenticatedUser
-  const resolveModel = deps.getModelById ?? getModelById
-  const buildInput = deps.buildModelInput ?? buildModelInput
-  const generateImageWith = deps.generateImage ?? generateImage
-  const submitVideoWith = deps.submitVideo ?? submitVideo
-  const toFetchableUrl = deps.toFalFetchableUrl ?? toFalFetchableUrl
-  const rehost = deps.rehostToR2 ?? rehostToR2
-  const record = deps.recordAsset ?? recordAsset
-  const attach = deps.attachGeneratedMediaToNode ?? attachGeneratedMediaToNode
+  const createGenerationClient = deps.createNexoClipGenerationClient ?? createNexoClipGenerationClient
+  const createRealtimeClient = deps.createInternalRealtimeClient ?? createInternalRealtimeClient
 
   return async function POST(request: Request) {
     if (process.env.GENERATION_DISABLED === '1') {
@@ -43,73 +38,44 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
     try {
       const body = await request.json()
       const projectId = typeof body.projectId === 'string' ? body.projectId : undefined
-      let authenticatedUserId: string | null = null
-      if (projectId) {
-        const user = await resolveUser(request)
-        if (!user) return unauthorizedResponse()
-        authenticatedUserId = user.id
-        const sql = db()
-        if (!(await userOwnsProject(sql, user.id, projectId))) {
-          return projectNotFoundResponse()
-        }
-      }
+      const user = await resolveUser(request)
+      if (!user) return unauthorizedResponse()
+      if (!projectId || !(await userOwnsProject(db(), user.id, projectId))) return projectNotFoundResponse()
 
-      const model = resolveModel(body.modelId)
-      if (!model) return NextResponse.json({ error: `Unknown model: ${body.modelId}` }, { status: 400 })
-      if (!body.prompt) return NextResponse.json({ error: 'prompt is required' }, { status: 400 })
-
-      const incoming = [
-        body.referenceImageUrl,
-        ...(Array.isArray(body.referenceImageUrls) ? body.referenceImageUrls : []),
-        ...(Array.isArray(body.referenceGroups) ? body.referenceGroups.flatMap((group: { urls?: string[] }) => group.urls || []) : []),
-      ].filter(Boolean)
-      const [referenceImages, endImageUrl] = await Promise.all([
-        Promise.all(incoming.map(toFetchableUrl)).then((urls) => urls.filter(Boolean) as string[]),
-        toFetchableUrl(body.endImageUrl),
-      ])
-      const input = buildInput(model, body.prompt, {
-        ...body.settings,
-        imageUrl: referenceImages[0],
-        referenceImageUrls: referenceImages.slice(1),
-        endImageUrl,
-      })
-
-      if (model.category === 'video') {
-        const job = await submitVideoWith(model, input)
-        return NextResponse.json({
-          request_id: job.requestId,
-          provider: job.provider,
-          model: job.model,
-          modelId: model.id,
-          category: model.category,
-        })
-      }
-
-      const output = await generateImageWith(model, input)
       const nodeId = typeof body.nodeId === 'string' ? body.nodeId : undefined
-      const stored: string[] = []
-      for (const source of output.images || []) {
-        const url = await rehost(source)
-        stored.push(url)
-        if (projectId) await record('image', model.providerModel, body.prompt, url, projectId)
+      const kind = body.kind === 'image' || body.kind === 'video' ? body.kind : undefined
+      const prompt = typeof body.prompt === 'string' ? body.prompt : undefined
+      const model = typeof body.model === 'string' ? body.model : typeof body.modelId === 'string' ? body.modelId : undefined
+      if (!nodeId || !kind || !prompt || !model) {
+        return NextResponse.json({ error: 'projectId, nodeId, kind, prompt, and model are required' }, { status: 400 })
       }
-      if (stored[0] && authenticatedUserId) {
-        await attach({
-          userId: authenticatedUserId,
-          projectId,
-          nodeId,
-          url: stored[0],
-        })
+
+      const realtime = createRealtimeClient()
+      const document = await realtime.exportDocument({ userId: user.id, projectId })
+      const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
+      if (!node || node.type !== (kind === 'image' ? 'imageGen' : 'videoGen')) return projectNotFoundResponse()
+
+      const parameters = {
+        ...(body.settings && typeof body.settings === 'object' && !Array.isArray(body.settings) ? body.settings : {}),
+        ...(typeof body.referenceImageUrl === 'string' ? { referenceImageUrl: body.referenceImageUrl } : {}),
+        ...(Array.isArray(body.referenceImageUrls) ? { referenceImageUrls: body.referenceImageUrls } : {}),
+        ...(Array.isArray(body.referenceGroups) ? { referenceGroups: body.referenceGroups } : {}),
+        ...(typeof body.endImageUrl === 'string' ? { endImageUrl: body.endImageUrl } : {}),
       }
-      return NextResponse.json({
-        request_id: crypto.randomUUID(),
-        provider: model.provider,
-        model: model.providerModel,
-        modelId: model.id,
-        category: model.category,
-        status: 'COMPLETED',
-        output: { images: stored, url: stored[0] },
+      const generation = await createGenerationClient().submit({
+        userId: user.id,
+        projectId,
+        nodeId,
+        input: { kind, prompt, model, parameters, idempotencyKey: `spite:${projectId}:${nodeId}:${crypto.randomUUID()}` },
       })
+      await realtime.patchNodeData({
+        userId: user.id,
+        projectId,
+        nodeId,
+        set: createQueuedGenerationPatch(generation),
+      })
+
+      return NextResponse.json({ generationId: generation.id, generationStatus: 'queued' }, { status: 202 })
     } catch (error: any) {
       return NextResponse.json({ error: error?.message || 'Generation failed' }, { status: Number(error?.status) || 500 })
     }

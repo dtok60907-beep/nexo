@@ -1,69 +1,68 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { pollVideo } from '@/lib/providers'
-import { attachGeneratedMediaToNode, recordAsset, rehostToR2 } from '@/lib/r2-upload'
+
 import { getDb } from '@/lib/db'
+import { createTerminalGenerationPatch } from '@/lib/durable-generation'
+import {
+  createNexoClipGenerationClient,
+  type NexoClipGenerationClient,
+} from '@/lib/nexoclip-generation-client'
 import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   projectNotFoundResponse,
   unauthorizedResponse,
   userOwnsProject,
 } from '@/lib/project-ownership'
+import {
+  createInternalRealtimeClient,
+  type InternalRealtimeClient,
+} from '@/lib/realtime/internal-client'
 
 interface GenerateStatusDeps {
   getDb?: typeof getDb
   getAuthenticatedUser?: typeof getAuthenticatedUser
-  pollVideo?: typeof pollVideo
-  rehostToR2?: typeof rehostToR2
-  recordAsset?: typeof recordAsset
-  attachGeneratedMediaToNode?: typeof attachGeneratedMediaToNode
+  createNexoClipGenerationClient?: () => NexoClipGenerationClient
+  createInternalRealtimeClient?: () => InternalRealtimeClient
 }
 
 export function createGenerateStatusHandler(deps: GenerateStatusDeps = {}) {
   const db = deps.getDb ?? getDb
   const resolveUser = deps.getAuthenticatedUser ?? getAuthenticatedUser
-  const pollVideoWith = deps.pollVideo ?? pollVideo
-  const rehost = deps.rehostToR2 ?? rehostToR2
-  const record = deps.recordAsset ?? recordAsset
-  const attach = deps.attachGeneratedMediaToNode ?? attachGeneratedMediaToNode
+  const createGenerationClient = deps.createNexoClipGenerationClient ?? createNexoClipGenerationClient
+  const createRealtimeClient = deps.createInternalRealtimeClient ?? createInternalRealtimeClient
 
   return async function GET(request: Request) {
-    const { searchParams } = new URL(request.url)
-    const requestId = searchParams.get('request_id')
-    const provider = searchParams.get('provider') || 'byteplus'
-    if (!requestId) return NextResponse.json({ error: 'request_id is required' }, { status: 400 })
-    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(requestId)) return NextResponse.json({ error: 'Invalid request_id' }, { status: 400 })
-
-    const projectId = searchParams.get('projectId') || undefined
-    let authenticatedUserId: string | null = null
-    if (projectId && projectId !== 'undefined' && projectId !== 'null') {
+    try {
+      const { searchParams } = new URL(request.url)
+      const projectId = searchParams.get('projectId') || undefined
       const user = await resolveUser(request)
       if (!user) return unauthorizedResponse()
-      authenticatedUserId = user.id
-      const sql = db()
-      if (!(await userOwnsProject(sql, user.id, projectId))) {
-        return projectNotFoundResponse()
-      }
-    }
+      if (!projectId || !(await userOwnsProject(db(), user.id, projectId))) return projectNotFoundResponse()
 
-    try {
-      const result = await pollVideoWith(provider, requestId)
-      if (result.status !== 'COMPLETED' || !result.output?.url) {
-        return NextResponse.json({ ...result, requestId })
-      }
-      const stored = await rehost(result.output.url)
       const nodeId = searchParams.get('nodeId') || undefined
-      if (projectId && projectId !== 'undefined' && projectId !== 'null') {
-        await record('video', searchParams.get('model') || 'byteplus', searchParams.get('prompt') || 'Generated asset', stored, projectId)
-        if (authenticatedUserId) {
-          await attach({
-            userId: authenticatedUserId,
-            projectId,
-            nodeId,
-            url: stored,
-          })
-        }
+      const generationId = searchParams.get('generationId') || undefined
+      if (!nodeId || !generationId || !/^[a-zA-Z0-9_-]{1,200}$/.test(generationId)) {
+        return NextResponse.json({ error: 'nodeId and a valid generationId are required' }, { status: 400 })
       }
-      return NextResponse.json({ status: 'COMPLETED', output: { url: stored, videos: [stored] }, requestId })
+
+      const realtime = createRealtimeClient()
+      const document = await realtime.exportDocument({ userId: user.id, projectId })
+      const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
+      if (!node || node.data.generationId !== generationId) return projectNotFoundResponse()
+
+      const generation = await createGenerationClient().status({ userId: user.id, projectId, nodeId, generationId })
+      const patch = createTerminalGenerationPatch(generation)
+      if (patch && Object.entries(patch).some(([key, value]) => node.data[key] !== value)) {
+        await realtime.patchNodeData({ userId: user.id, projectId, nodeId, set: patch })
+      }
+
+      const outputUrl = patch?.outputUrl as string | undefined
+      const error = patch?.generationError as string | null | undefined
+      return NextResponse.json({
+        generationId: generation.id,
+        generationStatus: patch?.generationStatus ?? (generation.status === 'queued' ? 'queued' : 'processing'),
+        ...(outputUrl ? { outputUrl } : {}),
+        ...(error ? { error } : {}),
+      })
     } catch (error: any) {
       return NextResponse.json({ error: error?.message || 'Status check failed' }, { status: Number(error?.status) || 500 })
     }
