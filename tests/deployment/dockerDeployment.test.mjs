@@ -67,16 +67,28 @@ test('deployment files, routes, and documented realtime env exist', () => {
   }
 
   const caddy = read('Caddyfile');
-  assert.match(caddy, /handle_path \/ai-clip-api\/\*/);
-  assert.match(caddy, /handle \/spite\/ws\*/);
-  assert.match(caddy, /handle \/spite\*/);
-  assert.ok(caddy.indexOf('handle /spite/ws') < caddy.indexOf('handle /spite*'));
-  assert.match(caddy, /respond \/spite\/api\/internal\/\* 404/);
-  assert.match(caddy, /respond \/api\/internal\/\* 404/);
-  assert.ok(
-    caddy.indexOf('respond /api/internal/* 404') < caddy.indexOf('handle {'),
-    'the public internal API deny must precede the Nexoclip catch-all',
-  );
+  const routeStart = caddy.search(/\broute\s*\{/);
+  assert.notEqual(routeStart, -1, 'Caddy routing must use route so Caddy preserves declaration order');
+  const route = caddy.slice(routeStart);
+  assert.match(route, /handle_path \/ai-clip-api\/\*/);
+  assert.match(route, /handle \/spite\/ws\*/);
+  assert.match(route, /handle \/spite\*/);
+  assert.match(route, /handle \/spite\/api\/internal\/\*\s*\{\s*respond 404\s*\}/);
+  assert.match(route, /handle \/api\/internal\/\*\s*\{\s*respond 404\s*\}/);
+  const orderedHandlers = [
+    'handle_path /ai-clip-api/*',
+    'handle /spite/api/internal/*',
+    'handle /api/internal/*',
+    'handle /spite/ws*',
+    'handle /spite*',
+    'handle {',
+  ];
+  for (const [index, handler] of orderedHandlers.entries()) {
+    assert.ok(route.indexOf(handler) !== -1, `missing ${handler} in ordered route`);
+    if (index > 0) {
+      assert.ok(route.indexOf(orderedHandlers[index - 1]) < route.indexOf(handler), `${handler} must follow ${orderedHandlers[index - 1]}`);
+    }
+  }
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/authorize/);
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/document/);
   assert.doesNotMatch(caddy, /handle \/api\/internal\/generations/);

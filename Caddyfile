@@ -1,22 +1,29 @@
 :80 {
-  encode zstd gzip
+	encode zstd gzip
 
-  handle_path /ai-clip-api/* {
-    reverse_proxy ai-clip:4175
-  }
+	route {
+		handle_path /ai-clip-api/* {
+			reverse_proxy ai-clip:4175
+		}
 
-  respond /spite/api/internal/* 404
-  respond /api/internal/* 404
+		handle /spite/api/internal/* {
+			respond 404
+		}
 
-  handle /spite/ws* {
-    reverse_proxy spite-realtime:3007
-  }
+		handle /api/internal/* {
+			respond 404
+		}
 
-  handle /spite* {
-    reverse_proxy spite:3005
-  }
+		handle /spite/ws* {
+			reverse_proxy spite-realtime:3007
+		}
 
-  handle {
-    reverse_proxy nexoclip:3000
-  }
+		handle /spite* {
+			reverse_proxy spite:3005
+		}
+
+		handle {
+			reverse_proxy nexoclip:3000
+		}
+	}
 }
