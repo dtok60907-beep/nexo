@@ -694,7 +694,7 @@ async function handleInternalDocumentRequest({
       }
     }
 
-    const durableSeq = await applyInternalActionWithRuntime({
+    const result = await applyInternalActionWithRuntime({
       doc: room.doc,
       runtime: room.runtime,
       projectId,
@@ -703,7 +703,7 @@ async function handleInternalDocumentRequest({
       body,
       emit,
     })
-    return { ok: true, durableSeq }
+    return { ok: true, ...result }
   }
 
   const loaded = await repository.loadOrImport(projectId)
@@ -721,7 +721,7 @@ async function handleInternalDocumentRequest({
     repository,
     loaded,
   })
-  const durableSeq = await applyInternalActionWithRuntime({
+  const result = await applyInternalActionWithRuntime({
     doc: loaded.doc,
     runtime,
     projectId,
@@ -730,7 +730,7 @@ async function handleInternalDocumentRequest({
     body,
     emit,
   })
-  return { ok: true, durableSeq }
+  return { ok: true, ...result }
 }
 
 async function applyInternalActionWithRuntime({
@@ -749,10 +749,14 @@ async function applyInternalActionWithRuntime({
   action: string
   body: Record<string, unknown>
   emit: (event: RealtimeServerEvent) => void
-}): Promise<number> {
+}): Promise<{ durableSeq: number; applied: boolean }> {
+  if (action === 'patch-node-data' && !nodeDataMatches(doc, body)) {
+    return { durableSeq: 0, applied: false }
+  }
+
   const mergedUpdate = buildInternalDocumentUpdate(doc, action, body, createInternalDocumentOrigin(projectId, userId))
   if (!mergedUpdate) {
-    return 0
+    return { durableSeq: 0, applied: false }
   }
 
   emit({
@@ -765,7 +769,21 @@ async function applyInternalActionWithRuntime({
     await runtime.flush()
   }
   Y.applyUpdate(doc, mergedUpdate, createInternalDocumentOrigin(projectId, userId))
-  return durableSeq
+  return { durableSeq, applied: true }
+}
+
+function nodeDataMatches(doc: Y.Doc, body: Record<string, unknown>): boolean {
+  if (typeof body.nodeId !== 'string') return false
+  const expected = body.expected
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) return true
+  const node = doc.getMap<Y.Map<unknown>>('nodes').get(body.nodeId)
+  if (!(node instanceof Y.Map)) return false
+  const data = node.get('data')
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+  return Object.entries(expected).every(([key, value]) => {
+    const current = (data as Record<string, unknown>)[key]
+    return current === value || (value === null && current === undefined)
+  })
 }
 
 function buildInternalDocumentUpdate(

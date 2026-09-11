@@ -728,7 +728,8 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       const submitPrompt = compiledPrompt
 
       // Send RAW settings; the server builds the model-specific payload.
-      const body = JSON.stringify({
+      const submissionId = crypto.randomUUID()
+      const body = {
         kind: 'video',
         model: modelId,
         projectId,
@@ -743,7 +744,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
           resolution,
           videoUrl: connectedVideoUrl || undefined,
         },
-      })
+      }
 
       // Each video is a separate fal job. Submit them ONE AT A TIME (never
       // overlapping) — parallel POSTs, even staggered, can overlap in flight and
@@ -751,12 +752,12 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       // 403 — it uses 429). Serialised enqueue + one retry on a transient 403 /
       // network blip. The jobs still run in parallel on fal afterwards.
       const count = Math.max(1, Math.min(12, numVideos))
-      const submitOnce = async () => {
+      const submitOnce = async (index: number) => {
         try {
           const res = await fetch(withBasePath('/api/generate/submit'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body,
+            body: JSON.stringify({ ...body, submissionId: `${submissionId}-${index}` }),
           })
           const json = await res.json().catch(() => ({}))
           return { ...json, _httpStatus: res.status }
@@ -767,10 +768,10 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       const results: Array<Awaited<ReturnType<typeof submitOnce>>> = []
       for (let i = 0; i < count; i++) {
         if (i > 0) await new Promise<void>(r => setTimeout(r, 300))
-        let r = await submitOnce()
+        let r = await submitOnce(i)
         if (!r.generationId && (r._httpStatus === 403 || r._httpStatus === 0)) {
           await new Promise<void>(res => setTimeout(res, 700))
-          r = await submitOnce() // one retry for a transient edge rejection
+          r = await submitOnce(i) // retry uses the same durable idempotency key
         }
         results.push(r)
       }

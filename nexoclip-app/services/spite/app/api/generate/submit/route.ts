@@ -6,6 +6,7 @@ import {
   type NexoClipGenerationClient,
 } from '@/lib/nexoclip-generation-client'
 import { createQueuedGenerationPatch } from '@/lib/durable-generation'
+import { getModelById } from '@/lib/fal-models'
 import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   projectNotFoundResponse,
@@ -43,36 +44,56 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
       if (!projectId || !(await userOwnsProject(db(), user.id, projectId))) return projectNotFoundResponse()
 
       const nodeId = typeof body.nodeId === 'string' ? body.nodeId : undefined
-      const mobile = body.mobile === true
       const kind = body.kind === 'image' || body.kind === 'video' ? body.kind : undefined
       const prompt = typeof body.prompt === 'string' ? body.prompt : undefined
-      const model = typeof body.model === 'string' ? body.model : typeof body.modelId === 'string' ? body.modelId : undefined
-      if (!nodeId || !kind || !prompt || !model) {
+      const modelId = typeof body.model === 'string' ? body.model : typeof body.modelId === 'string' ? body.modelId : undefined
+      const submissionId = typeof body.submissionId === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(body.submissionId)
+        ? body.submissionId
+        : undefined
+      if (!nodeId || !kind || !prompt || !modelId) {
         return NextResponse.json({ error: 'projectId, nodeId, kind, prompt, and model are required' }, { status: 400 })
       }
 
-      const realtime = createRealtimeClient()
-      if (!mobile) {
-        const document = await realtime.exportDocument({ userId: user.id, projectId })
-        const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
-        if (!node || node.type !== (kind === 'image' ? 'imageGen' : 'videoGen')) return projectNotFoundResponse()
+      const model = getModelById(modelId)
+      if (!model || model.category !== kind) {
+        return NextResponse.json({ error: 'Unsupported generation model' }, { status: 400 })
       }
 
+      const realtime = createRealtimeClient()
+      const document = await realtime.exportDocument({ userId: user.id, projectId })
+      const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
+      if (!node || node.type !== (kind === 'image' ? 'imageGen' : 'videoGen')) return projectNotFoundResponse()
+
       const parameters = mapLegacyParameters(body, kind)
+      const actionId = submissionId ?? stableSubmissionFingerprint({ kind, prompt, model: model.providerModel, parameters })
+      const claim = `spite:${projectId}:${nodeId}:${actionId}`
+      if (node.data.submissionClaim !== claim) {
+        const claimResult = await realtime.patchNodeData({
+          userId: user.id,
+          projectId,
+          nodeId,
+          set: { submissionClaim: claim, generationId: null, generationStatus: 'queued', generationError: null },
+          expected: { submissionClaim: null },
+        })
+        if (claimResult?.applied === false) {
+          return NextResponse.json({ error: 'A generation is already being submitted for this node' }, { status: 409 })
+        }
+      }
+
       const generation = await createGenerationClient().submit({
         userId: user.id,
         projectId,
         nodeId,
-        input: { kind, prompt, model, parameters, idempotencyKey: `spite:${projectId}:${nodeId}:${crypto.randomUUID()}` },
+        input: { kind, prompt, model: model.providerModel, parameters, idempotencyKey: claim },
       })
-      if (!mobile) {
-        await realtime.patchNodeData({
-          userId: user.id,
-          projectId,
-          nodeId,
-          set: createQueuedGenerationPatch(generation),
-        })
-      }
+      await realtime.patchNodeData({
+        userId: user.id,
+        projectId,
+        nodeId,
+        set: createQueuedGenerationPatch(generation),
+        unset: ['submissionClaim'],
+        expected: { submissionClaim: claim },
+      })
 
       return NextResponse.json({ generationId: generation.id, generationStatus: 'queued' }, { status: 202 })
     } catch (error: any) {
@@ -120,6 +141,13 @@ function mapLegacyParameters(body: Record<string, unknown>, kind: 'image' | 'vid
   if (videoUrl) parameters.referenceVideos = [videoUrl]
   if (frameImages.length) parameters.frameImages = frameImages
   return parameters
+}
+
+function stableSubmissionFingerprint(input: Record<string, unknown>): string {
+  const text = JSON.stringify(input)
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  return (hash >>> 0).toString(36)
 }
 
 function collectReferences(body: Record<string, unknown>): string[] {

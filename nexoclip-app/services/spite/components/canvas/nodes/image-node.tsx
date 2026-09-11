@@ -674,7 +674,8 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       // Fan out one fal job per requested image, mirroring how video-node
       // handles batch counts. This lets us blow past fal's per-request
       // num_images cap (typically 4) — `numImages` now goes up to 12.
-      const body = JSON.stringify({
+      const submissionId = crypto.randomUUID()
+      const body = {
         kind: 'image',
         model: modelId,
         projectId,
@@ -683,7 +684,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         referenceImageUrl: connectedImageUrl,
         referenceGroups: allRefGroups.length > 0 ? allRefGroups : undefined,
         settings: { aspectRatio, resolution },
-      })
+      }
       const count = Math.max(1, Math.min(12, numImages))
       // Submit the N jobs ONE AT A TIME — never overlapping. Firing them in
       // parallel (even staggered by a couple hundred ms) lets the POSTs overlap
@@ -692,12 +693,12 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       // calls, plus a single retry on a transient 403 / network blip, makes them
       // read as discrete user actions. The generations still run in parallel on
       // fal afterwards; only these submit calls are spaced out.
-      const submitOnce = async () => {
+      const submitOnce = async (index: number) => {
         try {
           const res = await fetch(withBasePath('/api/generate/submit'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body,
+            body: JSON.stringify({ ...body, submissionId: `${submissionId}-${index}` }),
           })
           const json = await res.json().catch(() => ({}))
           return { ...json, _httpStatus: res.status }
@@ -708,10 +709,10 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       const results: Array<Awaited<ReturnType<typeof submitOnce>>> = []
       for (let i = 0; i < count; i++) {
         if (i > 0) await new Promise<void>(r => setTimeout(r, 300))
-        let r = await submitOnce()
+        let r = await submitOnce(i)
         if (!r.generationId && (r._httpStatus === 403 || r._httpStatus === 0)) {
           await new Promise<void>(res => setTimeout(res, 700))
-          r = await submitOnce() // one retry for a transient edge rejection
+          r = await submitOnce(i) // retry uses the same durable idempotency key
         }
         results.push(r)
       }

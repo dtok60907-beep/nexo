@@ -8,6 +8,7 @@ import { createGenerateSubmitHandler } from '../app/api/generate/submit/route'
 import { createDuplicateProjectHandler } from '../app/api/projects/[projectId]/duplicate/route'
 import { createCanvasSnapshotRouteHandlers } from '../app/api/projects/[projectId]/canvas/snapshots/route'
 import { createAttachGeneratedMediaToNode } from './r2-upload'
+import { getModelById } from './fal-models'
 
 const OWNER_ID = '550e8400-e29b-41d4-a716-446655440001'
 const PROJECT_ID = '550e8400-e29b-41d4-a716-446655440000'
@@ -50,7 +51,7 @@ function makeRequest(url: string, {
   return request
 }
 
-test('submits an owned image node as a durable NexoClip generation and patches its id', async () => {
+test('submits an owned image node using the configured NexoClip provider model and patches its id', async () => {
   const patches: unknown[] = []
   const submissions: unknown[] = []
   const handler = createGenerateSubmitHandler({
@@ -69,7 +70,7 @@ test('submits an owned image node as a durable NexoClip generation and patches i
   const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
     method: 'POST',
     body: {
-      projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1',
+      projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'nano-banana-pro', submissionId: 'submit-1',
       referenceImageUrl: '/reference-a.png',
       referenceGroups: [{ urls: ['/reference-b.png'] }],
       settings: { aspectRatio: '1:1', resolution: '2K', seed: 7 },
@@ -77,13 +78,22 @@ test('submits an owned image node as a durable NexoClip generation and patches i
   }))
 
   assert.equal(response.status, 202)
+  assert.equal((submissions[0] as any).input.model, getModelById('nano-banana-pro')!.providerModel)
+  assert.equal((submissions[0] as any).input.idempotencyKey, `spite:${PROJECT_ID}:node-1:submit-1`)
   assert.deepEqual((submissions[0] as any).input.parameters, {
     aspectRatio: '1:1', resolution: '2K', seed: 7,
     referenceImages: ['/reference-a.png', '/reference-b.png'],
   })
   assert.deepEqual(patches[0], {
     userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
+    set: { submissionClaim: `spite:${PROJECT_ID}:node-1:submit-1`, generationId: null, generationStatus: 'queued', generationError: null },
+    expected: { submissionClaim: null },
+  })
+  assert.deepEqual(patches[1], {
+    userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
     set: { generationId: 'generation-1', generationStatus: 'queued', generationError: null },
+    unset: ['submissionClaim'],
+    expected: { submissionClaim: `spite:${PROJECT_ID}:node-1:submit-1` },
   })
 })
 
@@ -104,12 +114,33 @@ test('rejects unsupported legacy controls before creating a durable job', async 
 
   const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
     method: 'POST',
-    body: { projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1', settings: { enableAudio: true } },
+    body: { projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'nano-banana-pro', settings: { enableAudio: true } },
   }))
 
   assert.equal(response.status, 400)
   assert.match((await response.json()).error, /enableAudio/)
   assert.equal(submitted, false)
+})
+
+test('does not overwrite a newer generation when an old terminal poll races it', async () => {
+  const patches: any[] = []
+  const handler = createGenerateStatusHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { throw new Error('submit should not be called') },
+      status: async () => ({ id: 'old-generation', kind: 'image', status: 'succeeded', outputs: [{ assetId: 'a', download: { url: '/api/assets/a/download' } }] }),
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: canvasWithNode('node-1', 'imageGen', { generationId: 'old-generation', generationStatus: 'processing' }), durableSeq: 1, projectedSeq: 1 }),
+      patchNodeData: async (patch: unknown) => { patches.push(patch) },
+    }) as any,
+  })
+
+  const response = await handler(makeRequest(`http://spite.local/api/generate/status?projectId=${PROJECT_ID}&nodeId=node-1&generationId=old-generation`))
+
+  assert.equal(response.status, 200)
+  assert.equal(patches[0].expected?.generationId, 'old-generation')
 })
 
 test('writes a successful durable generation result to the owned canvas node once', async () => {
@@ -137,6 +168,7 @@ test('writes a successful durable generation result to the owned canvas node onc
   assert.deepEqual(patches[0], {
     userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
     set: { generationStatus: 'completed', outputUrl: '/api/assets/a/download', status: 'completed', error: null, generationError: null },
+    expected: { generationId: 'g1' },
   })
 })
 
