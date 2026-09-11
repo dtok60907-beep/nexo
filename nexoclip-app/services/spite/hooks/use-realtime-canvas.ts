@@ -5,6 +5,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import * as Y from 'yjs'
 
 import { withBasePath } from '../lib/base-path'
+import { needsDurableGenerationRecovery } from '../lib/durable-generation'
 import {
   createReactFlowBinding,
   type RealtimeCanvasBinding,
@@ -261,6 +262,7 @@ export class RealtimeCanvasRoom {
   private snapshot: RealtimeCanvasRoomSnapshot
   private readonly listeners = new Set<() => void>()
   private readonly fetchFn: FetchLike
+  private readonly recoveringGenerationKeys = new Set<string>()
 
   constructor(
     readonly projectId: string,
@@ -280,6 +282,7 @@ export class RealtimeCanvasRoom {
         ...this.snapshot,
         ...this.binding.getSnapshot(),
       }
+      void this.recoverDurableGenerations()
       this.emit()
     })
 
@@ -292,6 +295,11 @@ export class RealtimeCanvasRoom {
       preserveTrailingSlash: false,
       onStateless: ({ payload }) => {
         this.handleStateless(payload)
+      },
+      onSynced: ({ state }) => {
+        if (state) {
+          void this.recoverDurableGenerations()
+        }
       },
     } as HocuspocusProviderConfiguration)
 
@@ -344,6 +352,49 @@ export class RealtimeCanvasRoom {
     return this.refCount
   }
 
+  async recoverDurableGenerations(): Promise<void> {
+    const recoveries = this.snapshot.allNodes.flatMap((node) => {
+      const data = node.data as Record<string, unknown>
+      const generationId = data.generationId
+      if (!needsDurableGenerationRecovery(data) || typeof generationId !== 'string') {
+        return []
+      }
+
+      const key = `${this.projectId}:${node.id}:${generationId}`
+      if (this.recoveringGenerationKeys.has(key)) {
+        return []
+      }
+
+      this.recoveringGenerationKeys.add(key)
+      const query = new URLSearchParams({
+        projectId: this.projectId,
+        nodeId: node.id,
+        generationId,
+      })
+      return [this.requestDurableGenerationRecovery(key, query)]
+    })
+
+    await Promise.all(recoveries)
+  }
+
+  private async requestDurableGenerationRecovery(key: string, query: URLSearchParams): Promise<void> {
+    try {
+      const response = await this.fetchFn(withBasePath(`/api/generate/status?${query}`), {
+        credentials: 'include',
+      })
+      if (!response.ok) {
+        throw new Error(`Generation status request failed with HTTP ${response.status}`)
+      }
+
+      const payload = await response.json() as { generationStatus?: unknown }
+      if (payload.generationStatus !== 'queued' && payload.generationStatus !== 'processing') {
+        this.recoveringGenerationKeys.delete(key)
+      }
+    } catch {
+      this.recoveringGenerationKeys.delete(key)
+    }
+  }
+
   async getToken(): Promise<string> {
     const response = await this.fetchFn(withBasePath('/api/auth/realtime-token'), {
       method: 'POST',
@@ -368,6 +419,7 @@ export class RealtimeCanvasRoom {
     this.provider.awareness?.off?.('update', this.handleAwarenessChange)
     this.binding.destroy()
     this.provider.destroy()
+    this.recoveringGenerationKeys.clear()
     this.listeners.clear()
   }
 
