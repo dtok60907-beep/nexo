@@ -52,11 +52,13 @@ function makeRequest(url: string, {
 
 test('submits an owned image node as a durable NexoClip generation and patches its id', async () => {
   const patches: unknown[] = []
+  const submissions: unknown[] = []
   const handler = createGenerateSubmitHandler({
     getAuthenticatedUser: async () => ({ id: OWNER_ID }),
     getDb: ownedProjectSql,
     createNexoClipGenerationClient: () => ({
-      submit: async () => ({ id: 'generation-1', kind: 'image', status: 'queued' }),
+      submit: async (input) => { submissions.push(input); return { id: 'generation-1', kind: 'image', status: 'queued' } },
+      status: async () => { throw new Error('status should not be called') },
     }),
     createInternalRealtimeClient: () => ({
       exportDocument: async () => ({ projection: canvasWithNode('node-1'), durableSeq: 1, projectedSeq: 1 }),
@@ -66,14 +68,48 @@ test('submits an owned image node as a durable NexoClip generation and patches i
 
   const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
     method: 'POST',
-    body: { projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1', settings: {} },
+    body: {
+      projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1',
+      referenceImageUrl: '/reference-a.png',
+      referenceGroups: [{ urls: ['/reference-b.png'] }],
+      settings: { aspectRatio: '1:1', resolution: '2K', seed: 7 },
+    },
   }))
 
   assert.equal(response.status, 202)
+  assert.deepEqual((submissions[0] as any).input.parameters, {
+    aspectRatio: '1:1', resolution: '2K', seed: 7,
+    referenceImages: ['/reference-a.png', '/reference-b.png'],
+  })
   assert.deepEqual(patches[0], {
     userId: OWNER_ID, projectId: PROJECT_ID, nodeId: 'node-1',
     set: { generationId: 'generation-1', generationStatus: 'queued', generationError: null },
   })
+})
+
+test('rejects unsupported legacy controls before creating a durable job', async () => {
+  let submitted = false
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { submitted = true; throw new Error('must not submit') },
+      status: async () => { throw new Error('must not poll') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: canvasWithNode('node-1'), durableSeq: 1, projectedSeq: 1 }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: { projectId: PROJECT_ID, nodeId: 'node-1', kind: 'image', prompt: 'red kite', model: 'model-1', settings: { enableAudio: true } },
+  }))
+
+  assert.equal(response.status, 400)
+  assert.match((await response.json()).error, /enableAudio/)
+  assert.equal(submitted, false)
 })
 
 test('writes a successful durable generation result to the owned canvas node once', async () => {
@@ -82,7 +118,9 @@ test('writes a successful durable generation result to the owned canvas node onc
     getAuthenticatedUser: async () => ({ id: OWNER_ID }),
     getDb: ownedProjectSql,
     createNexoClipGenerationClient: () => ({
+      submit: async () => { throw new Error('submit should not be called') },
       status: async () => ({
+
         id: 'g1', kind: 'image', status: 'succeeded',
         outputs: [{ assetId: 'a', download: { url: '/api/assets/a/download' } }],
       }),
@@ -108,7 +146,9 @@ test('does not overwrite a completed node during a repeated terminal poll', asyn
     getAuthenticatedUser: async () => ({ id: OWNER_ID }),
     getDb: ownedProjectSql,
     createNexoClipGenerationClient: () => ({
+      submit: async () => { throw new Error('submit should not be called') },
       status: async () => ({
+
         id: 'g1', kind: 'image', status: 'succeeded',
         outputs: [{ assetId: 'a', download: { url: '/api/assets/a/download' } }],
       }),

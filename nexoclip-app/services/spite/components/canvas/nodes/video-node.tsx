@@ -170,7 +170,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const [progress, setProgress] = useState<number | undefined>()
   const [error, setError] = useState<string | null>(null)
   const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
-  const [requestId, setRequestId] = useState<string | null>(null)
+  const [generationId, setGenerationId] = useState<string | null>(null)
   // Timestamp of the most recent submission. Powers the relative-age
   // display in the right-side jobs panel.
   const [submittedAt, setSubmittedAt] = useState<number | undefined>(
@@ -365,10 +365,10 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   // here; the marker stays until the generation actually resolves, so
   // another refresh resumes too.
   useEffect(() => {
-    const pending = data.pendingRequestId as string | undefined
-    if (pending && !outputUrl && !requestId) {
+    const pending = data.generationId as string | undefined
+    if (pending && !outputUrl && !generationId) {
       setProviderModel((data.pendingProviderModel as string) || null)
-      setRequestId(pending)
+      setGenerationId(pending)
       setStatus('in_queue')
       // Restore the start-of-generation timestamp (or assume now if the
       // page was refreshed and we don't have it stored). Used by the
@@ -383,7 +383,6 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   // Clear the persisted in-flight job marker when the generation resolves.
   const clearPending = useCallback(() => {
     patchPersistedNodeData({
-      pendingRequestId: undefined,
       pendingProvider: undefined,
       pendingProviderModel: undefined,
       pendingFalEndpoint: undefined,
@@ -392,7 +391,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   }, [patchPersistedNodeData])
 
   // 10-minute soft timeout. Stops polling and marks the node failed, but
-  // does NOT clear pendingRequestId — the user can click "Re-check
+  // does NOT clear generationId — the user can click "Re-check
   // result" to poll again in case fal completed after the timeout
   // window. Resets when the user clicks re-check or triggers a new
   // generation.
@@ -402,10 +401,10 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const [resumeToken, setResumeToken] = useState(0)
 
   // Poll for status
-  const pollStatus = useCallback(async (reqId: string, providerId: string) => {
+  const pollStatus = useCallback(async (reqId: string) => {
     if (stopRef.current) return true
     // Soft timeout check — bail BEFORE the next round-trip so we don't
-    // continue hammering fal indefinitely. The request_id stays in node
+    // continue hammering fal indefinitely. The generationId stays in node
     // data so the user can manually re-check.
     if (startTimeRef.current && Date.now() - startTimeRef.current > TIMEOUT_MS) {
       setStatus('failed')
@@ -414,7 +413,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     }
     try {
       const statusQuery = createGenerationStatusQuery({
-        nodeId: id, requestId: reqId, provider: (data.pendingProvider as string) || currentModel?.provider || 'byteplus', model: providerId, projectId, getNodes, getEdges,
+        nodeId: id, generationId: reqId, projectId,
       })
       const response = await fetch(withBasePath(`/api/generate/status?${statusQuery}`))
       const result = await response.json()
@@ -429,15 +428,15 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         return true
       }
 
-      if (result.status === 'COMPLETED') {
+      if (result.generationStatus === 'completed') {
         setProgress(undefined)
         // API returns { output: { videos: [...], url: '...' } }
-        const videoUrl = result.output?.url || result.output?.videos?.[0] || result.result?.video?.url || result.result?.video_url
+        const videoUrl = result.outputUrl
         if (videoUrl) {
           const completedUrl = withBasePath(videoUrl)
           setOutputUrl(completedUrl)
           setStatus('completed')
-          setRequestId(null)
+          setGenerationId(null)
           updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
           clearPending()
         } else {
@@ -448,19 +447,19 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         return true
       }
 
-      if (result.status === 'FAILED') {
+      if (result.generationStatus === 'failed') {
         setStatus('failed')
         setError(result.error || 'Generation failed')
         clearPending()
         return true
       }
 
-      if (result.status === 'IN_PROGRESS') {
+      if (result.generationStatus === 'processing') {
         setStatus('in_progress')
         if (result.progress !== undefined) {
           setProgress(result.progress)
         }
-      } else if (result.status === 'IN_QUEUE') {
+      } else if (result.generationStatus === 'queued') {
         setStatus('in_queue')
       }
 
@@ -469,19 +468,18 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       console.error('Poll error:', err)
       return false
     }
-  }, [clearPending, data.pendingProvider, getEdges, getNodes, id, projectId, currentModel?.provider])
+  }, [clearPending, getEdges, getNodes, id, projectId])
 
-  // Start polling when we have a request_id. resumeToken is included as
+  // Start polling when we have a generationId. resumeToken is included as
   // a dep so a user-initiated re-check (handleRecheck below) restarts the
-  // polling loop even though requestId itself didn't change.
+  // polling loop even though generationId itself didn't change.
   useEffect(() => {
-    if (!requestId || !currentModel) return
+    if (!generationId || !currentModel) return
     stopRef.current = false
-    const pollProvider = providerModel || currentModel.providerModel
 
     const poll = async () => {
       if (stopRef.current) return
-      const shouldStop = await pollStatus(requestId, pollProvider)
+      const shouldStop = await pollStatus(generationId)
       if (!shouldStop && !stopRef.current) {
         pollingRef.current = setTimeout(poll, 2000)
       }
@@ -496,7 +494,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         clearTimeout(pollingRef.current)
       }
     }
-  }, [requestId, currentModel, providerModel, pollStatus, resumeToken])
+  }, [generationId, currentModel, pollStatus, resumeToken])
 
   // User-triggered re-check of a request that timed out (or that the
   // user wants to poll again for any reason). Fires a SINGLE direct
@@ -507,8 +505,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   // is still pending, resumeToken is bumped to restart the background
   // polling loop for another 10-minute window.
   const handleRecheck = async () => {
-    if (!requestId || !currentModel) return
-    const pollProvider = providerModel || currentModel.providerModel
+    if (!generationId || !currentModel) return
     const toastId = `recheck-${id}`
 
     startTimeRef.current = Date.now()
@@ -519,7 +516,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
 
     try {
       const statusQuery = createGenerationStatusQuery({
-        nodeId: id, requestId, provider: (data.pendingProvider as string) || currentModel.provider, model: pollProvider, projectId, getNodes, getEdges,
+        nodeId: id, generationId, projectId,
       })
       const response = await fetch(withBasePath(`/api/generate/status?${statusQuery}`))
       const result = await response.json()
@@ -532,12 +529,8 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         return
       }
 
-      if (result.status === 'COMPLETED') {
-        const videoUrl =
-          result.output?.url ||
-          result.output?.videos?.[0] ||
-          result.result?.video?.url ||
-          result.result?.video_url
+      if (result.generationStatus === 'completed') {
+        const videoUrl = result.outputUrl
         if (!videoUrl) {
           setStatus('failed')
           setError('Provider completed without a video URL')
@@ -548,7 +541,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         const completedUrl = withBasePath(videoUrl)
         setOutputUrl(completedUrl)
         setStatus('completed')
-        setRequestId(null)
+        setGenerationId(null)
         setProgress(undefined)
         updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
         clearPending()
@@ -556,7 +549,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         return
       }
 
-      if (result.status === 'FAILED') {
+      if (result.generationStatus === 'failed') {
         setStatus('failed')
         setError(result.error || 'Generation failed')
         clearPending()
@@ -565,7 +558,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       }
 
       // Still IN_QUEUE or IN_PROGRESS — keep polling.
-      if (result.status === 'IN_PROGRESS') {
+      if (result.generationStatus === 'processing') {
         setStatus('in_progress')
         if (result.progress !== undefined) setProgress(result.progress)
         const pct = typeof result.progress === 'number' ? ` (${Math.round(result.progress * 100)}%)` : ''
@@ -736,7 +729,8 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
 
       // Send RAW settings; the server builds the model-specific payload.
       const body = JSON.stringify({
-        modelId,
+        kind: 'video',
+        model: modelId,
         projectId,
         nodeId: id,
         prompt: submitPrompt,
@@ -747,19 +741,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
           aspectRatio,
           duration,
           resolution,
-          enableAudio,
-          enableLoop,
           videoUrl: connectedVideoUrl || undefined,
-          // Connected audio asset URL (Kling 2.6 only). Server creates
-          // and caches a fal voice_id for this audio, appends it to the
-          // voice_ids array, runs the generation.
-          audioUrl: connectedAudioUrl || undefined,
-          // Upscaler mode picks the Topaz model variant server-side.
-          upscaleMode,
-          // Depth-map colouring (Depth Anything Video).
-          colormap,
-          // Kling 2.6 voice IDs — parsed server-side into array.
-          voiceIds: voiceIds.trim() || undefined,
         },
       })
 
@@ -786,13 +768,13 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       for (let i = 0; i < count; i++) {
         if (i > 0) await new Promise<void>(r => setTimeout(r, 300))
         let r = await submitOnce()
-        if (!r.request_id && (r._httpStatus === 403 || r._httpStatus === 0)) {
+        if (!r.generationId && (r._httpStatus === 403 || r._httpStatus === 0)) {
           await new Promise<void>(res => setTimeout(res, 700))
           r = await submitOnce() // one retry for a transient edge rejection
         }
         results.push(r)
       }
-      const ok = results.filter(r => r.request_id)
+      const ok = results.filter(r => r.generationId)
       const failedCount = count - ok.length
       if (ok.length === 0) {
         const firstFail = results[0]
@@ -825,19 +807,16 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       }
 
       // This node tracks the first job.
-      const firstEndpoint = ok[0].model || currentModel.providerModel
       const startedAt = Date.now()
-      setProviderModel(firstEndpoint)
-      setRequestId(ok[0].request_id)
-      setStatus('in_queue')
+      setGenerationId(ok[0].generationId)
+      setStatus(ok[0].generationStatus === 'processing' ? 'in_progress' : 'in_queue')
       startTimeRef.current = startedAt
 
       // Persist the in-flight job onto the node so polling can resume
       // after a page refresh. Cleared when the generation resolves.
       patchPersistedNodeData({
-        pendingRequestId: ok[0].request_id,
-        pendingProvider: ok[0].provider || currentModel.provider,
-        pendingProviderModel: firstEndpoint,
+        generationId: ok[0].generationId,
+        generationStatus: ok[0].generationStatus,
         pendingStartedAt: startedAt,
       })
 
@@ -863,9 +842,8 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
             position: { x: baseX + col * colGap, y: baseY + row * rowGap },
             data: {
               ...restData,
-              pendingRequestId: res.request_id,
-              pendingProvider: res.provider || currentModel.provider,
-              pendingProviderModel: res.model || currentModel.providerModel,
+              generationId: res.generationId,
+              generationStatus: res.generationStatus,
               pendingStartedAt: stamp,
             },
           }
@@ -924,27 +902,19 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleCancel = async () => {
-    if (!requestId || !currentModel) return
+    if (!generationId || !currentModel) return
 
     // Stop polling immediately and locally so the UI reliably unsticks.
     stopRef.current = true
     if (pollingRef.current) clearTimeout(pollingRef.current)
     setStatus('cancelled')
     toast.warning('Generation cancelled', { description: currentModel.name })
-    const reqId = requestId
+    const reqId = generationId
     const cancelModel = providerModel || currentModel.providerModel
-    setRequestId(null)
+    setGenerationId(null)
     clearPending()
 
-    try {
-      await fetch(withBasePath('/api/generate/cancel'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ request_id: reqId, provider: currentModel.provider, model: cancelModel }),
-      })
-    } catch (err) {
-      console.error('Cancel error:', err)
-    }
+
   }
 
   const isGenerating = status === 'submitting' || status === 'in_queue' || status === 'in_progress'
@@ -1315,7 +1285,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
           
           {/* Generate / Cancel / Re-check button.
               When a job has timed out (status='failed' but we still have
-              the request_id from fal), show a "re-check" button so the
+              the generationId from fal), show a "re-check" button so the
               user can poll once more in case fal completed late — fal
               keeps results around for ~24h, so a slow job isn't lost. */}
           {isGenerating ? (
@@ -1326,7 +1296,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
             >
               <X size={10} weight="bold" />
             </button>
-          ) : status === 'failed' && requestId ? (
+          ) : status === 'failed' && generationId ? (
             <div className="flex items-center gap-1">
               <button
                 onClick={handleRecheck}

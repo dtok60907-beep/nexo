@@ -39,19 +39,20 @@ export function createGenerateStatusHandler(deps: GenerateStatusDeps = {}) {
       if (!projectId || !(await userOwnsProject(db(), user.id, projectId))) return projectNotFoundResponse()
 
       const nodeId = searchParams.get('nodeId') || undefined
+      const mobile = searchParams.get('mobile') === '1'
       const generationId = searchParams.get('generationId') || undefined
       if (!nodeId || !generationId || !/^[a-zA-Z0-9_-]{1,200}$/.test(generationId)) {
         return NextResponse.json({ error: 'nodeId and a valid generationId are required' }, { status: 400 })
       }
 
       const realtime = createRealtimeClient()
-      const document = await realtime.exportDocument({ userId: user.id, projectId })
-      const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
-      if (!node || node.data.generationId !== generationId) return projectNotFoundResponse()
+      const document = mobile ? undefined : await realtime.exportDocument({ userId: user.id, projectId })
+      const node = document?.projection.nodes.find((candidate) => candidate.id === nodeId)
+      if (!mobile && (!node || node.data.generationId !== generationId)) return projectNotFoundResponse()
 
       const generation = await createGenerationClient().status({ userId: user.id, projectId, nodeId, generationId })
       const patch = createTerminalGenerationPatch(generation)
-      if (patch && Object.entries(patch).some(([key, value]) => node.data[key] !== value)) {
+      if (patch && node && Object.entries(patch).some(([key, value]) => node.data[key] !== value)) {
         await realtime.patchNodeData({ userId: user.id, projectId, nodeId, set: patch })
       }
 

@@ -80,26 +80,16 @@ test('generation gating requires a connected Text node with text', () => {
   })
 })
 
-test('status payload resolves the prompt at request time rather than from a stale render', () => {
-  const currentNodes = nodes.map((node) => ({ ...node, data: { ...node.data } }))
-  const getNodes = () => currentNodes
-  const getEdges = () => [edgeA]
+test('status payload uses the durable generation identity only', () => {
+  const query = createGenerationStatusQuery({
+    nodeId: 'image-1', generationId: 'generation-1', projectId: 'project-1',
+  })
 
-  assert.equal(
-    createGenerationStatusQuery({
-      nodeId: 'image-1', requestId: 'job-1', provider: 'fal', model: 'model-1', projectId: 'project-1', getNodes, getEdges,
-    }).get('prompt'),
-    'alpha',
-  )
-
-  currentNodes[0].data.text = ' beta after editing '
-
-  assert.equal(
-    createGenerationStatusQuery({
-      nodeId: 'image-1', requestId: 'job-1', provider: 'fal', model: 'model-1', projectId: 'project-1', getNodes, getEdges,
-    }).get('prompt'),
-    'beta after editing',
-  )
+  assert.deepEqual([...query.entries()], [
+    ['projectId', 'project-1'],
+    ['nodeId', 'image-1'],
+    ['generationId', 'generation-1'],
+  ])
 })
 
 test('parseAspectRatio parses a landscape ratio', () => {

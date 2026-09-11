@@ -313,40 +313,19 @@ test('generation submit rejects non-owner project mutations before provider work
   const handler = createGenerateSubmitHandler({
     getDb: () => fixture.sql,
     getAuthenticatedUser: async () => ({ id: OTHER_USER_ID }),
-    getModelById: (() => ({
-      id: 'image-model',
-      category: 'image',
-      provider: 'fal',
-      providerModel: 'fal/image',
-    } as any)) as any,
-    buildModelInput: (() => ({
-      prompt: 'hello',
-      aspectRatio: '1:1',
-      resolution: '1024x1024',
-      duration: 5,
-      generateAudio: false,
-      referenceImages: [],
-      endImageUrl: null,
+    createNexoClipGenerationClient: (() => ({
+      submit: async () => { touchedProvider = true; throw new Error('durable client must not be called') },
+      status: async () => { touchedProvider = true; throw new Error('durable client must not be called') },
     })) as any,
-    generateImage: (async () => {
-      touchedProvider = true
-      return { images: [] }
-    }) as any,
-    submitVideo: (async () => {
-      touchedProvider = true
-      return { requestId: 'job-1', provider: 'fal', model: 'fal/video' }
-    }) as any,
-    toFalFetchableUrl: (async (value: string | null | undefined) => value || null) as any,
-    rehostToR2: (async (value: string) => value) as any,
-    recordAsset: (async () => 'asset-1') as any,
-    attachGeneratedMediaToNode: (async () => {}) as any,
   })
 
   const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
     method: 'POST',
     body: {
       projectId: OWNER_PROJECT_ID,
-      modelId: 'image-model',
+      nodeId: 'node-1',
+      kind: 'image',
+      model: 'image-model',
       prompt: 'hello',
     },
   }) as any)
@@ -363,20 +342,17 @@ test('generation status and latest fail closed for non-owners before provider or
   const status = createGenerateStatusHandler({
     getDb: () => fixture.sql,
     getAuthenticatedUser: async () => ({ id: OTHER_USER_ID }),
-    pollVideo: (async () => {
-      touchedProvider = true
-      return { status: 'IN_PROGRESS' }
-    }) as any,
-    rehostToR2: (async (value: string) => value) as any,
-    recordAsset: (async () => 'asset-1') as any,
-    attachGeneratedMediaToNode: (async () => {}) as any,
+    createNexoClipGenerationClient: (() => ({
+      submit: async () => { touchedProvider = true; throw new Error('durable client must not be called') },
+      status: async () => { touchedProvider = true; throw new Error('durable client must not be called') },
+    })) as any,
   })
   const latest = createGenerateLatestHandler({
     getDb: () => fixture.sql,
     getAuthenticatedUser: async () => ({ id: OTHER_USER_ID }),
   })
 
-  const statusResponse = await status(makeRequest(`http://spite.local/api/generate/status?request_id=req-1&projectId=${OWNER_PROJECT_ID}`) as any)
+  const statusResponse = await status(makeRequest(`http://spite.local/api/generate/status?generationId=generation-1&nodeId=node-1&projectId=${OWNER_PROJECT_ID}`) as any)
   const latestResponse = await latest(makeRequest(`http://spite.local/api/generate/latest?projectId=${OWNER_PROJECT_ID}&type=image&prompt=hello&since=1`) as any)
 
   assert.equal(statusResponse.status, 404)

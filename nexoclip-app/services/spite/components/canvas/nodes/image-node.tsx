@@ -153,7 +153,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const [progress, setProgress] = useState<number | undefined>()
   const [error, setError] = useState<string | null>(null)
   const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
-  const [requestId, setRequestId] = useState<string | null>(null)
+  const [generationId, setGenerationId] = useState<string | null>(null)
   // Timestamp of the most recent submission. Powers the relative-age
   // display in the right-side jobs panel.
   const [submittedAt, setSubmittedAt] = useState<number | undefined>(
@@ -215,7 +215,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         const completedUrl = withBasePath(url)
         setOutputUrl(completedUrl)
         setStatus('completed')
-        setRequestId(null)
+        setGenerationId(null)
         updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
       })
       .catch(() => {})
@@ -225,14 +225,14 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }, [])
 
   // Resume polling after a page refresh: if the saved data has a pending
-  // request id, pick up the in-flight job. We do NOT clear pendingRequestId
+  // request id, pick up the in-flight job. We do NOT clear generationId
   // here — the data stays on the node until the generation actually
   // resolves (success / failure / cancel), so a second refresh resumes too.
   useEffect(() => {
-    const pending = data.pendingRequestId as string | undefined
-    if (pending && !outputUrl && !requestId) {
+    const pending = data.generationId as string | undefined
+    if (pending && !outputUrl && !generationId) {
       setProviderModel((data.pendingProviderModel as string) || null)
-      setRequestId(pending)
+      setGenerationId(pending)
       setStatus('in_queue')
       // Restore the start-of-generation timestamp (fall back to now if
       // the page was refreshed before timestamps were tracked). Used by
@@ -245,7 +245,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }, [])
 
   // 10-minute soft timeout — stops polling and marks failed but keeps
-  // request_id on the node so the user can re-check with the button.
+  // generationId on the node so the user can re-check with the button.
   const TIMEOUT_MS = 10 * 60 * 1000
   const startTimeRef = useRef<number | null>(null)
   const [resumeToken, setResumeToken] = useState(0)
@@ -353,7 +353,6 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   // resume a completed job.
   const clearPending = useCallback(() => {
     patchPersistedNodeData({
-      pendingRequestId: undefined,
       pendingProvider: undefined,
       pendingProviderModel: undefined,
       pendingFalEndpoint: undefined,
@@ -362,10 +361,10 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }, [patchPersistedNodeData])
 
   // Poll for status
-  const pollStatus = useCallback(async (reqId: string, providerId: string) => {
+  const pollStatus = useCallback(async (reqId: string) => {
     if (stopRef.current) return true
     // Soft timeout — bail before the next round-trip if we've been
-    // polling for over 10 minutes. Keeps requestId on the node so the
+    // polling for over 10 minutes. Keeps generationId on the node so the
     // user can re-check via the "Re-check" button.
     if (startTimeRef.current && Date.now() - startTimeRef.current > TIMEOUT_MS) {
       setStatus('failed')
@@ -374,7 +373,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     }
     try {
       const statusQuery = createGenerationStatusQuery({
-        nodeId: id, requestId: reqId, provider: (data.pendingProvider as string) || currentModel?.provider || 'byteplus', model: providerId, projectId, getNodes, getEdges,
+        nodeId: id, generationId: reqId, projectId,
       })
       const response = await fetch(withBasePath(`/api/generate/status?${statusQuery}`))
       const result = await response.json()
@@ -389,17 +388,15 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         return true
       }
 
-      if (result.status === 'COMPLETED') {
+      if (result.generationStatus === 'completed') {
         setProgress(undefined)
         // API returns { output: { images: [...], url: '...' } }
-        const images: string[] = (result.output?.images?.length
-          ? result.output.images
-          : (result.output?.url ? [result.output.url] : []))
+        const images: string[] = result.outputUrl ? [result.outputUrl] : []
         if (images.length) {
           const completedUrl = withBasePath(images[0])
           setOutputUrl(completedUrl)
           setStatus('completed')
-          setRequestId(null)
+          setGenerationId(null)
           updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
           clearPending()
           // For batch generations, drop the extra results as duplicate nodes
@@ -443,19 +440,19 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         return true
       }
 
-      if (result.status === 'FAILED') {
+      if (result.generationStatus === 'failed') {
         setStatus('failed')
         setError(result.error || 'Generation failed')
         clearPending()
         return true
       }
 
-      if (result.status === 'IN_PROGRESS') {
+      if (result.generationStatus === 'processing') {
         setStatus('in_progress')
         if (result.progress !== undefined) {
           setProgress(result.progress)
         }
-      } else if (result.status === 'IN_QUEUE') {
+      } else if (result.generationStatus === 'queued') {
         setStatus('in_queue')
       }
 
@@ -464,19 +461,18 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       console.error('Poll error:', err)
       return false
     }
-  }, [clearPending, data.pendingProvider, getEdges, getNodes, id, projectId, currentModel?.provider])
+  }, [clearPending, getEdges, getNodes, id, projectId])
 
-  // Start polling when we have a request_id. resumeToken is included as
+  // Start polling when we have a generationId. resumeToken is included as
   // a dep so a user-initiated re-check restarts the polling loop even
-  // though requestId itself didn't change.
+  // though generationId itself didn't change.
   useEffect(() => {
-    if (!requestId || !currentModel) return
+    if (!generationId || !currentModel) return
     stopRef.current = false
-    const pollProvider = providerModel || currentModel.providerModel
 
     const poll = async () => {
       if (stopRef.current) return
-      const shouldStop = await pollStatus(requestId, pollProvider)
+      const shouldStop = await pollStatus(generationId)
       if (!shouldStop && !stopRef.current) {
         pollingRef.current = setTimeout(poll, 2000)
       }
@@ -491,7 +487,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         clearTimeout(pollingRef.current)
       }
     }
-  }, [requestId, currentModel, providerModel, pollStatus, resumeToken])
+  }, [generationId, currentModel, pollStatus, resumeToken])
 
   // User-triggered re-check. Fires a single direct status call against
   // fal so the user sees fal's actual answer immediately — no 4-second
@@ -500,8 +496,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   // resumeToken is bumped to restart background polling for another
   // 10-minute window.
   const handleRecheck = async () => {
-    if (!requestId || !currentModel) return
-    const pollProvider = providerModel || currentModel.providerModel
+    if (!generationId || !currentModel) return
     const toastId = `recheck-${id}`
 
     startTimeRef.current = Date.now()
@@ -512,7 +507,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
 
     try {
       const statusQuery = createGenerationStatusQuery({
-        nodeId: id, requestId, provider: (data.pendingProvider as string) || currentModel.provider, model: pollProvider, projectId, getNodes, getEdges,
+        nodeId: id, generationId, projectId,
       })
       const response = await fetch(withBasePath(`/api/generate/status?${statusQuery}`))
       const result = await response.json()
@@ -525,11 +520,8 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         return
       }
 
-      if (result.status === 'COMPLETED') {
-        const imageUrl =
-          result.output?.url ||
-          result.output?.images?.[0] ||
-          result.result?.image?.url
+      if (result.generationStatus === 'completed') {
+        const imageUrl = result.outputUrl
         if (!imageUrl) {
           setStatus('failed')
           setError('Provider completed without an image URL')
@@ -540,7 +532,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         const completedUrl = withBasePath(imageUrl)
         setOutputUrl(completedUrl)
         setStatus('completed')
-        setRequestId(null)
+        setGenerationId(null)
         setProgress(undefined)
         updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
         clearPending()
@@ -548,7 +540,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         return
       }
 
-      if (result.status === 'FAILED') {
+      if (result.generationStatus === 'failed') {
         setStatus('failed')
         setError(result.error || 'Generation failed')
         clearPending()
@@ -557,7 +549,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       }
 
       // Still IN_QUEUE or IN_PROGRESS — keep polling.
-      if (result.status === 'IN_PROGRESS') {
+      if (result.generationStatus === 'processing') {
         setStatus('in_progress')
         if (result.progress !== undefined) setProgress(result.progress)
         const pct = typeof result.progress === 'number' ? ` (${Math.round(result.progress * 100)}%)` : ''
@@ -683,13 +675,14 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       // handles batch counts. This lets us blow past fal's per-request
       // num_images cap (typically 4) — `numImages` now goes up to 12.
       const body = JSON.stringify({
-        modelId,
+        kind: 'image',
+        model: modelId,
         projectId,
         nodeId: id,
         prompt: compiled.prompt,
         referenceImageUrl: connectedImageUrl,
         referenceGroups: allRefGroups.length > 0 ? allRefGroups : undefined,
-        settings: { aspectRatio, resolution, numImages: 1 },
+        settings: { aspectRatio, resolution },
       })
       const count = Math.max(1, Math.min(12, numImages))
       // Submit the N jobs ONE AT A TIME — never overlapping. Firing them in
@@ -716,14 +709,14 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
       for (let i = 0; i < count; i++) {
         if (i > 0) await new Promise<void>(r => setTimeout(r, 300))
         let r = await submitOnce()
-        if (!r.request_id && (r._httpStatus === 403 || r._httpStatus === 0)) {
+        if (!r.generationId && (r._httpStatus === 403 || r._httpStatus === 0)) {
           await new Promise<void>(res => setTimeout(res, 700))
           r = await submitOnce() // one retry for a transient edge rejection
         }
         results.push(r)
       }
 
-      const ok = results.filter(r => r.request_id)
+      const ok = results.filter(r => r.generationId)
       const failedCount = count - ok.length
       if (ok.length === 0) {
         const firstFail = results[0]
@@ -761,25 +754,14 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
 
       // Direct image providers complete synchronously. Apply the first result
       // immediately; only legacy async responses enter the polling path.
-      const completed = ok.filter(r => r.status === 'COMPLETED' && r.output?.url)
-      if (completed.length) {
-        const completedUrl = withBasePath(completed[0].output.url)
-        setOutputUrl(completedUrl)
-        setStatus('completed')
-        updatePersistedNodeData((currentData) => completeGenerationNode(currentData, completedUrl))
-        clearPending()
-      }
-      const firstEndpoint = ok[0].model || currentModel.providerModel
       const startedAt = Date.now()
-      setProviderModel(firstEndpoint)
-      setRequestId(completed.length ? null : ok[0].request_id)
-      if (!completed.length) setStatus('in_queue')
+      setGenerationId(ok[0].generationId)
+      setStatus(ok[0].generationStatus === 'processing' ? 'in_progress' : 'in_queue')
       startTimeRef.current = startedAt
 
       patchPersistedNodeData({
-        pendingRequestId: completed.length ? undefined : ok[0].request_id,
-        pendingProvider: completed.length ? undefined : (ok[0].provider || currentModel.provider),
-        pendingProviderModel: firstEndpoint,
+        generationId: ok[0].generationId,
+        generationStatus: ok[0].generationStatus,
         pendingStartedAt: startedAt,
       })
 
@@ -805,10 +787,8 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
             position: { x: baseX + col * colGap, y: baseY + row * rowGap },
             data: {
               ...restData,
-              outputUrl: res.output?.url ? withBasePath(res.output.url) : undefined,
-              pendingRequestId: res.status === 'COMPLETED' ? undefined : res.request_id,
-              pendingProvider: res.status === 'COMPLETED' ? undefined : (res.provider || currentModel.provider),
-              pendingProviderModel: res.status === 'COMPLETED' ? undefined : (res.model || currentModel.providerModel),
+              generationId: res.generationId,
+              generationStatus: res.generationStatus,
               pendingStartedAt: stamp,
             },
           }
@@ -861,7 +841,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleCancel = async () => {
-    if (!requestId || !currentModel) return
+    if (!generationId || !currentModel) return
 
     // Stop polling immediately and locally, regardless of whether fal can
     // still cancel the job — so the UI reliably unsticks on click.
@@ -869,20 +849,12 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     if (pollingRef.current) clearTimeout(pollingRef.current)
     setStatus('cancelled')
     toast.warning('Generation cancelled', { description: currentModel.name })
-    const reqId = requestId
+    const reqId = generationId
     const cancelModel = providerModel || currentModel.providerModel
-    setRequestId(null)
+    setGenerationId(null)
     clearPending()
 
-    try {
-      await fetch(withBasePath('/api/generate/cancel'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ request_id: reqId, provider: currentModel.provider, model: cancelModel }),
-      })
-    } catch (err) {
-      console.error('Cancel error:', err)
-    }
+
   }
 
   const isGenerating = status === 'submitting' || status === 'in_queue' || status === 'in_progress'
@@ -1102,7 +1074,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
           
           {/* Generate / Cancel / Re-check button. After a 10-min soft
               timeout the node sits in status='failed' but still holds the
-              fal request_id — Re-check polls fal one more time in case
+              fal generationId — Re-check polls fal one more time in case
               the job finished after the timeout window (fal keeps results
               ~24h, so slow generations aren't lost). */}
           {isGenerating ? (
@@ -1113,7 +1085,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
             >
               <X size={10} weight="bold" />
             </button>
-          ) : status === 'failed' && requestId ? (
+          ) : status === 'failed' && generationId ? (
             <div className="flex items-center gap-1">
               <button
                 onClick={handleRecheck}

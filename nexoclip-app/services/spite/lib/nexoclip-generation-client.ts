@@ -1,7 +1,7 @@
 import {
   createCanvasAuthorizationActionDigest,
   signCanvasAuthorization,
-} from '../../../src/lib/realtime/internalAuth.js'
+} from '@/realtime/internal-auth'
 
 export type DurableGenerationInput = {
   kind: 'image' | 'video'

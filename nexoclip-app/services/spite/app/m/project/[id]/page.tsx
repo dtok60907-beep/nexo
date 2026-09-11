@@ -178,17 +178,18 @@ export default function FlowThread() {
     try {
       if (i > 0) await new Promise((r) => setTimeout(r, i * 250))
       const m = getModelById(mId)
+      const nodeId = `mobile-${Date.now()}-${i}`
       const submitRes = await fetch(withBasePath('/api/generate/submit'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          modelId: mId, prompt: myPrompt,
+          kind: 'image', mobile: true, model: mId, projectId, nodeId, prompt: myPrompt,
           referenceImageUrl: refUrls[0],
           referenceGroups: refUrls.length > 1 ? refUrls.slice(1).map((u) => ({ urls: [u] })) : undefined,
-          settings: { aspectRatio: asp || m?.defaultAspectRatio, resolution: res || m?.defaultResolution, numImages: 1 },
+          settings: { aspectRatio: asp || m?.defaultAspectRatio, resolution: res || m?.defaultResolution },
         }),
       })
       const submitData = await submitRes.json().catch(() => ({}))
-      if (!submitRes.ok || !submitData.request_id) {
+      if (!submitRes.ok || !submitData.generationId) {
         // /api/generate/submit forwards fal's status + text verbatim, so 401/403
         // here is fal (bad key / exhausted balance), not our host. Show both the
         // actionable hint and fal's own words.
@@ -205,16 +206,16 @@ export default function FlowThread() {
         const msg = sessionExpired ? hint : [hint, submitData.error].filter(Boolean).join(' — ')
         setError(msg || 'Submit failed'); decPending(); return
       }
-      const { request_id, model: pollModel } = submitData
+      const { generationId } = submitData
       for (let k = 0; k < 120; k++) {
         await new Promise((r) => setTimeout(r, 2000))
-        const q = new URLSearchParams({ request_id, model: pollModel, prompt: myPrompt, projectId })
+        const q = new URLSearchParams({ generationId, nodeId, projectId, mobile: '1' })
         const sd = await (await fetch(withBasePath(`/api/generate/status?${q.toString()}`))).json().catch(() => ({}))
-        if (sd.status === 'COMPLETED') {
-          const url = sd.output?.url
+        if (sd.generationStatus === 'completed') {
+          const url = sd.outputUrl
           if (url) {
             setAssets((prev) => [
-              { id: `new-${Date.now()}-${i}`, type: sd.output?.videos ? 'video' : 'image', model: m?.name || null, r2_url: url, prompt: myPrompt, created_at: new Date().toISOString(), aspect: asp, refs: refUrls },
+              { id: `new-${Date.now()}-${i}`, type: 'image', model: m?.name || null, r2_url: url, prompt: myPrompt, created_at: new Date().toISOString(), aspect: asp, refs: refUrls },
               ...prev,
             ])
             // Persist the references against this result so Reuse can restore
@@ -227,7 +228,7 @@ export default function FlowThread() {
           }
           decPending(); loadBalance(); return
         }
-        if (sd.status === 'FAILED') { setError(sd.error || 'Generation failed'); decPending(); return }
+        if (sd.generationStatus === 'failed') { setError(sd.error || 'Generation failed'); decPending(); return }
       }
       setError('Timed out waiting for a result.'); decPending()
     } catch (err) {

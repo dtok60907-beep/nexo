@@ -34,17 +34,12 @@ export function getGenerationPromptState(nodeId: string, nodes: Node[], edges: E
 
 type GenerationStatusQuery = {
   nodeId: string
-  requestId: string
-  provider: string
-  model: string
+  generationId: string
   projectId: string
-  getNodes: () => Node[]
-  getEdges: () => Edge[]
 }
 
-export function createGenerationStatusQuery({ nodeId, requestId, provider, model, projectId, getNodes, getEdges }: GenerationStatusQuery) {
-  const { prompt } = resolveIncomingPrompt(nodeId, getNodes(), getEdges())
-  return new URLSearchParams({ request_id: requestId, provider, model, projectId, nodeId, prompt })
+export function createGenerationStatusQuery({ nodeId, generationId, projectId }: GenerationStatusQuery) {
+  return new URLSearchParams({ projectId, nodeId, generationId })
 }
 
 export function parseAspectRatio(value: string, fallback: string): number {
