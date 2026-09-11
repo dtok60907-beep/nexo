@@ -74,6 +74,7 @@ test('deployment files, routes, and documented realtime env exist', () => {
   assert.match(caddy, /respond \/spite\/api\/internal\/\* 404/);
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/authorize/);
   assert.doesNotMatch(caddy, /reverse_proxy[^\n]*internal\/document/);
+  assert.doesNotMatch(caddy, /handle \/api\/internal\/generations/);
   assert.doesNotMatch(caddy, /handle \/scheduler\*/);
 
   const envExample = read('nexoclip-app/.env.example');
