@@ -67,6 +67,34 @@ export async function listWorkspaceAssets(workspaceId) {
   }));
 }
 
+export async function deleteWorkspaceAsset(workspaceId, assetId, storage = createStorage(), pool = getPool()) {
+  if (!workspaceId) throw new Error('workspace_id is required');
+  if (!assetId) throw new Error('asset_id is required');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      'SELECT id, workspace_id, storage_key FROM assets WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+      [workspaceId, assetId],
+    );
+    const asset = result.rows[0];
+    if (!asset) {
+      await client.query('COMMIT');
+      return null;
+    }
+    await client.query('DELETE FROM generation_outputs WHERE workspace_id = $1 AND asset_id = $2', [workspaceId, assetId]);
+    await client.query('DELETE FROM assets WHERE workspace_id = $1 AND id = $2', [workspaceId, assetId]);
+    await storage.delete(asset.storage_key);
+    await client.query('COMMIT');
+    return asset;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function createAssetDownload(workspaceId, assetId, storage = createStorage()) {
   if (!workspaceId) throw new Error('workspace_id is required');
   if (!assetId) throw new Error('asset_id is required');

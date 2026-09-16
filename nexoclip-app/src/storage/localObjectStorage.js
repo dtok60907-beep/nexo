@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 function encode(value) {
@@ -66,6 +66,13 @@ export class LocalObjectStorage {
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, body);
     await writeFile(`${target}.metadata`, JSON.stringify({ contentType }));
+  }
+
+  async delete(key) {
+    const root = path.resolve(this.root);
+    const target = path.resolve(root, key);
+    if (!target.startsWith(`${root}${path.sep}`)) throw new Error('Invalid storage key');
+    await Promise.all([rm(target, { force: true }), rm(`${target}.metadata`, { force: true })]);
   }
 
   async get(url) {

@@ -1,6 +1,7 @@
 'use client'
 
 import { withBasePath } from '@/lib/base-path'
+import { workspaceAssetDeleteUrl } from '@/lib/workspace-asset-delete'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
@@ -431,7 +432,7 @@ export function LeftToolbar({
     const ids = Array.from(selectedAssetIds)
     const results = await Promise.all(
       ids.map(id =>
-        fetch(withBasePath(`/api/assets/${id}`), { method: 'DELETE' })
+        fetch(workspaceAssetDeleteUrl(id, projectId), { method: 'DELETE' })
           .then(r => ({ id, status: r.status }))
           .catch(() => ({ id, status: 0 }))
       )
@@ -1344,7 +1345,7 @@ export function LeftToolbar({
                         onClick={async () => {
                           const currentIndex = filteredGenAssets.findIndex(a => a.id === selectedGenAsset.id)
                           const nextAsset = filteredGenAssets[currentIndex + 1] ?? filteredGenAssets[currentIndex - 1] ?? null
-                          const res = await fetch(withBasePath(`/api/assets/${selectedGenAsset.id}`), { method: 'DELETE' })
+                          const res = await fetch(workspaceAssetDeleteUrl(selectedGenAsset.id, projectId), { method: 'DELETE' })
                           if (res.ok) {
                             const body = await res.json().catch(() => null) as
                               | { kept?: boolean; reason?: string; removed_from_folders?: number }
@@ -1822,7 +1823,7 @@ export function LeftToolbar({
                           const currentIndex = filteredGenAssets.findIndex(a => a.id === selectedGenAsset.id)
                           const nextAsset = filteredGenAssets[currentIndex + 1] ?? filteredGenAssets[currentIndex - 1] ?? null
 
-                          const res = await fetch(withBasePath(`/api/assets/${selectedGenAsset.id}`), { method: 'DELETE' })
+                          const res = await fetch(workspaceAssetDeleteUrl(selectedGenAsset.id, projectId), { method: 'DELETE' })
                           const body = res.ok
                             ? (await res.json().catch(() => null)) as
                                 | { kept?: boolean; removed_from_folders?: number }

@@ -7,6 +7,7 @@ import {
   assetNotFoundResponse,
   findOwnedGenerationAsset,
   unauthorizedResponse,
+  userOwnsProject,
 } from '@/lib/project-ownership'
 import {
   createInternalRealtimeClient,
@@ -32,6 +33,8 @@ interface AssetRouteDeps {
   getAuthenticatedUser?: typeof getAuthenticatedUser
   getR2Client?: typeof getR2Client
   createInternalRealtimeClient?: () => InternalRealtimeClient
+  fetchFn?: typeof fetch
+  env?: Partial<Pick<NodeJS.ProcessEnv, 'NEXOCLIP_INTERNAL_URL'>>
 }
 
 export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
@@ -39,6 +42,8 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
   const resolveUser = deps.getAuthenticatedUser ?? getAuthenticatedUser
   const r2Client = deps.getR2Client ?? getR2Client
   const internalRealtime = deps.createInternalRealtimeClient ?? createInternalRealtimeClient
+  const fetchFn = deps.fetchFn ?? fetch
+  const env = deps.env ?? process.env
 
   return {
     async GET(
@@ -118,7 +123,41 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
         const { assetId } = await params
         const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
         if (!asset) {
-          return assetNotFoundResponse()
+          const projectId = new URL(request.url).searchParams.get('projectId')
+          if (!projectId || !(await userOwnsProject(sql, user.id, projectId))) return assetNotFoundResponse()
+
+          const ownedProjects = await sql`
+            SELECT id::text AS id FROM projects WHERE userid = ${user.id}
+          ` as Array<{ id: string }>
+          const realtime = internalRealtime()
+          const authoritativeDocuments = await Promise.all(
+            ownedProjects.map(({ id }) => realtime.exportDocument({ userId: user.id, projectId: id })),
+          )
+          if (authoritativeDocuments.some(({ projection }) => projectionHasMediaReference(projection, { assetId }))) {
+            return NextResponse.json({ error: 'Asset is still used on a canvas' }, { status: 403 })
+          }
+
+          const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')
+          if (!baseUrl) return NextResponse.json({ error: 'Workspace asset service is unavailable' }, { status: 503 })
+          const upstream = await fetchFn(`${baseUrl}/api/assets/${encodeURIComponent(assetId)}`, {
+            method: 'DELETE',
+            headers: { cookie: request.headers.get('cookie') ?? '' },
+          })
+          if (upstream.ok) {
+            await sql`
+              DELETE FROM asset_folder_items
+              WHERE asset_id = ${assetId}
+                AND folder_id IN (
+                  SELECT f.id FROM asset_folders f
+                  JOIN projects p ON p.id = f.project_id
+                  WHERE p.userid = ${user.id}
+                )
+            `
+          }
+          return new NextResponse(await upstream.text(), {
+            status: upstream.status,
+            headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+          })
         }
 
         const removedRows = await sql`
