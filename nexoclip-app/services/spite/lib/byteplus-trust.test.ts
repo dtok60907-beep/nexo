@@ -19,6 +19,7 @@ import {
   safeBytePlusTrustError,
   shouldPollBytePlusTrust,
   trustForSeedanceView,
+  trustImportSourceUrl,
   workspaceAssetDownloadUrl,
   workspaceAssetIdFromUrl,
   resolveWorkspaceAssetId,
@@ -47,6 +48,18 @@ test('recovers trusted identity from persisted node data when display URL is sig
   assert.equal(resolveWorkspaceAssetId(signedR2, 'not-a-uuid'), null)
 })
 
+test('legacy R2 proxy imports request a private same-origin trust copy', () => {
+  assert.equal(
+    trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png'),
+    '/spite/api/r2-image/uploads/reference.png?trust_import=1',
+  )
+  assert.equal(
+    trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png?version=2'),
+    '/spite/api/r2-image/uploads/reference.png?version=2&trust_import=1',
+  )
+  assert.equal(trustImportSourceUrl('https://other.example/reference.png'), 'https://other.example/reference.png')
+})
+
 test('imports browser-readable legacy images before trust', async () => {
   const calls: Array<{ input: string; method?: string }> = []
   const result = await importImageForTrust({
@@ -62,6 +75,7 @@ test('imports browser-readable legacy images before trust', async () => {
   })
   assert.equal(result.assetId, '2b3a6608-ff3f-45ef-a323-ec9e9e08d399')
   assert.equal(calls.length, 2)
+  assert.equal(calls[0].input, '/spite/api/r2-image/uploads/reference.png?trust_import=1')
   assert.equal(calls[1].input, '/api/assets/import')
   assert.equal(calls[1].method, 'POST')
 })

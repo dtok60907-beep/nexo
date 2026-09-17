@@ -30,6 +30,19 @@ export function workspaceAssetDownloadUrl(assetId: string) {
   return `/api/assets/${encodeURIComponent(assetId)}/download`
 }
 
+export function trustImportSourceUrl(url: string) {
+  try {
+    const parsed = new URL(url, 'https://canvas.invalid')
+    if (!/^\/(?:spite\/)?api\/r2-image\//.test(parsed.pathname)) return url
+    parsed.searchParams.set('trust_import', '1')
+    return /^[a-z][a-z\d+.-]*:\/\//i.test(url)
+      ? parsed.toString()
+      : `${parsed.pathname}${parsed.search}`
+  } catch {
+    return url
+  }
+}
+
 export async function importImageForTrust({
   url,
   filename = 'canvas-image.png',
@@ -42,7 +55,7 @@ export async function importImageForTrust({
   const existingId = workspaceAssetIdFromUrl(url)
   if (existingId) return { assetId: existingId, canonicalUrl: url }
 
-  const source = await fetchFn(url)
+  const source = await fetchFn(trustImportSourceUrl(url))
   const contentType = source.headers.get('content-type')?.split(';')[0]?.trim() || ''
   if (!source.ok || !contentType.startsWith('image/')) throw new Error('Source image is unavailable')
   const form = new FormData()

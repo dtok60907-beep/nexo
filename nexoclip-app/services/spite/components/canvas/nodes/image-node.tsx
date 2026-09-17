@@ -158,7 +158,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const [status, setStatus] = useState<GenerationStatus>('idle')
   const [progress, setProgress] = useState<number | undefined>()
   const [error, setError] = useState<string | null>(null)
-  const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
+  const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
   const [generationId, setGenerationId] = useState<string | null>(null)
   // Timestamp of the most recent submission. Powers the relative-age
   // display in the right-side jobs panel.
@@ -231,9 +231,9 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     setStatus(durableStatus || (data.status as GenerationStatus) || ((data.outputUrl as string | undefined) ? 'completed' : 'idle'))
     setError((data.generationError as string) || (data.error as string) || null)
     setSubmittedAt((data.submittedAt as number) || undefined)
-    setOutputUrl(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
+    setOutputUrl(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
     queueMicrotask(finishSync)
-  }, [data.aspectRatio, data.error, data.generationError, data.generationStatus, data.modelId, data.numImages, data.outputUrl, data.resolution, data.status, data.submittedAt])
+  }, [data.aspectRatio, data.error, data.generationError, data.generationStatus, data.modelId, data.numImages, data.outputUrl, data.resolution, data.status, data.submittedAt, data.workspaceAssetId])
 
   useEffect(() => {
     if (outputUrl && outputUrl !== announcedOutputRef.current) {

@@ -18,16 +18,16 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   const projectId = (params?.id as string) || ''
   const { createNextShot, patchNodeData, replaceShot } = useCanvasCollaboration()
-  const [thumbnail, setThumbnail] = useState<string | null>(resolveNodeMediaUrl({ thumbnail: data.thumbnail }) || null)
+  const [thumbnail, setThumbnail] = useState<string | null>(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
   const [folderModalOpen, setFolderModalOpen] = useState(false)
   const [folderType, setFolderType] = useState<'character' | 'prop' | 'location'>('character')
   const [lightboxOpen, setLightboxOpen] = useState(false)
 
   // Sync thumbnail from data prop
   useEffect(() => {
-    const nextThumbnail = resolveNodeMediaUrl({ thumbnail: data.thumbnail }) || null
+    const nextThumbnail = resolveNodeMediaUrl(data as Record<string, unknown>) || null
     if (nextThumbnail !== thumbnail) setThumbnail(nextThumbnail)
-  }, [data.thumbnail, thumbnail])
+  }, [data.thumbnail, data.workspaceAssetId, thumbnail])
 
   // Reference nodes used to read/write `selectedShotId` while image and
   // video generator nodes used `shotId`. That field-name split made the
