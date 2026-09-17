@@ -41,7 +41,7 @@ test('assets/[assetId] hides foreign assets and only deletes owned stored keys',
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
 
-    if (normalized.includes('from generation_history g join projects p on p.id = g.project_id')) {
+    if (normalized.includes('from generation_history g join projects p on p.id::text = g.project_id')) {
       const userId = String(values[0])
       const assetId = String(values[1])
       if (userId === OWNER_ID && assetId === 'owned-asset') {
@@ -109,7 +109,7 @@ test('asset canonicalization verifies an owned main-app image before replacing i
   let fetchCalls = 0
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
-    if (normalized.includes('from generation_history g join projects p on p.id = g.project_id')) {
+    if (normalized.includes('from generation_history g join projects p on p.id::text = g.project_id')) {
       return [{ id: 'owned-asset', project_id: OWNER_PROJECT_ID, r2_url: '/api/r2-image/old.png' }]
     }
     if (normalized.startsWith('update generation_history set r2_url = ?')) {
