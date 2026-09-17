@@ -186,14 +186,20 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const { addEdges, addNodes, createNextShot, patchNodeData, replaceShot, updateNodeData } = useCanvasCollaboration()
   const updateNodeInternals = useUpdateNodeInternals()
   const syncGuardRef = useRef(createLocalStateSyncGuard())
+  // Collaboration methods are recreated when the shared canvas snapshot changes.
+  // Keep persistence wrappers stable so those renders cannot reset generation polling.
+  const patchNodeDataRef = useRef(patchNodeData)
+  const updateNodeDataRef = useRef(updateNodeData)
+  patchNodeDataRef.current = patchNodeData
+  updateNodeDataRef.current = updateNodeData
   const patchPersistedNodeData = useCallback((patch: Record<string, unknown>) => {
     if (!syncGuardRef.current.allowsPersistence()) return
-    patchNodeData(id, patch)
-  }, [id, patchNodeData])
+    patchNodeDataRef.current(id, patch)
+  }, [id])
   const updatePersistedNodeData = useCallback((updater: (currentData: Record<string, unknown>) => Record<string, unknown>) => {
     if (!syncGuardRef.current.allowsPersistence()) return
-    updateNodeData(id, updater)
-  }, [id, updateNodeData])
+    updateNodeDataRef.current(id, updater)
+  }, [id])
   const imageTrust = useImageTrust({
     url: outputUrl,
     filename: `${String(data.label || 'generated-image')}.png`,
