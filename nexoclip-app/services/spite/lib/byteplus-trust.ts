@@ -26,10 +26,6 @@ export function resolveWorkspaceAssetId(
     ?? (typeof persistedAssetId === 'string' && WORKSPACE_ASSET_ID.test(persistedAssetId) ? persistedAssetId : null)
 }
 
-export function workspaceAssetDownloadUrl(assetId: string) {
-  return `/api/assets/${encodeURIComponent(assetId)}/download`
-}
-
 export function trustImportSourceUrl(url: string) {
   try {
     const parsed = new URL(url, 'https://canvas.invalid')

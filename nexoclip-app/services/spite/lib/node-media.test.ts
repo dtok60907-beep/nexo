@@ -10,13 +10,13 @@ test('prefixes legacy root-relative media URLs with the configured base path', (
   )
 })
 
-test('trusted workspace identity overrides stale legacy display URLs', () => {
+test('keeps the complete display URL instead of synthesizing one without workspace context', () => {
   assert.equal(
     resolveNodeMediaUrl({
       outputUrl: '/spite/api/r2-image/uploads/person.png',
       workspaceAssetId: '45f74b7b-3abd-4c9f-85ea-9e05a7d1df75',
     }),
-    '/api/assets/45f74b7b-3abd-4c9f-85ea-9e05a7d1df75/download',
+    '/spite/api/r2-image/uploads/person.png',
   )
 })
 

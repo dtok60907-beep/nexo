@@ -27,12 +27,6 @@ function str(v: unknown): string | undefined {
 export function resolveNodeMediaUrl(data: NodeData): string | undefined {
   if (!data) return undefined
   const d = data as Record<string, unknown>
-  const workspaceAssetId = typeof d.workspaceAssetId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(d.workspaceAssetId)
-    ? d.workspaceAssetId
-    : undefined
-  // Trust canonicalization can race an old signed/legacy display URL. The durable
-  // workspace identity is authoritative and remains browser-readable after refresh.
-  if (workspaceAssetId) return `/api/assets/${workspaceAssetId}/download`
   // Prefer a real output; fall back to upload/reference fields. `videoThumbnail`
   // is last: it's a poster frame, only useful when nothing else exists.
   return (

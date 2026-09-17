@@ -20,7 +20,6 @@ import {
   shouldPollBytePlusTrust,
   trustForSeedanceView,
   trustImportSourceUrl,
-  workspaceAssetDownloadUrl,
   workspaceAssetIdFromUrl,
   resolveWorkspaceAssetId,
 } from '@/lib/byteplus-trust'
@@ -44,7 +43,6 @@ test('recovers trusted identity from persisted node data when display URL is sig
   const signedR2 = 'https://bucket.r2.cloudflarestorage.com/uploads/reference.png?X-Amz-Signature=secret'
 
   assert.equal(resolveWorkspaceAssetId(signedR2, assetId), assetId)
-  assert.equal(workspaceAssetDownloadUrl(assetId), `/api/assets/${assetId}/download`)
   assert.equal(resolveWorkspaceAssetId(signedR2, 'not-a-uuid'), null)
 })
 
@@ -167,7 +165,8 @@ test('image generator and image reference nodes expose trust only while selected
   assert.match(imageNodeSource, /useImageTrust/)
   assert.match(referenceNodeSource, /useImageTrust/)
   assert.match(imageNodeSource, /workspaceAssetId: data\.workspaceAssetId/)
-  assert.match(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId \|\| data\.assetId/)
+  assert.match(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId/)
+  assert.doesNotMatch(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId \|\| data\.assetId/)
   assert.match(imageNodeSource, /enabled: Boolean\(selected\).*Boolean\(outputUrl\)/)
   assert.match(referenceNodeSource, /enabled: Boolean\(selected\).*Boolean\(thumbnail\)/)
   assert.match(nodeToolbarSource, /trustAction/)

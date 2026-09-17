@@ -7,7 +7,6 @@ import {
   requestBytePlusTrust,
   safeBytePlusTrustError,
   resolveWorkspaceAssetId,
-  workspaceAssetDownloadUrl,
   workspaceAssetIdFromUrl,
   type BytePlusTrustState,
 } from '@/lib/byteplus-trust'
@@ -35,7 +34,6 @@ export function useImageTrust({
   onCanonicalizedRef.current = onCanonicalized
 
   useEffect(() => {
-    const urlAssetId = workspaceAssetIdFromUrl(url)
     const nextAssetId = resolveWorkspaceAssetId(url, workspaceAssetId)
     setAssetId(nextAssetId)
     setState({ status: 'not_trusted' })
@@ -46,9 +44,6 @@ export function useImageTrust({
       .then(next => {
         if (cancelled) return
         setState(next)
-        if (next.status === 'active' && !urlAssetId) {
-          onCanonicalizedRef.current?.(workspaceAssetDownloadUrl(nextAssetId), nextAssetId)
-        }
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -59,9 +54,9 @@ export function useImageTrust({
     requestRef.current = true
     setInFlight(true)
     try {
-      const knownAssetId = resolveWorkspaceAssetId(url, workspaceAssetId)
-      const imported = knownAssetId
-        ? { assetId: knownAssetId, canonicalUrl: workspaceAssetDownloadUrl(knownAssetId) }
+      const canonicalAssetId = workspaceAssetIdFromUrl(url)
+      const imported = canonicalAssetId
+        ? { assetId: canonicalAssetId, canonicalUrl: url }
         : await importImageForTrust({ url, filename })
       setAssetId(imported.assetId)
       if (imported.canonicalUrl !== url) onCanonicalizedRef.current?.(imported.canonicalUrl, imported.assetId)
