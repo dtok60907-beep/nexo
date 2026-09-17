@@ -202,6 +202,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }, [id])
   const imageTrust = useImageTrust({
     url: outputUrl,
+    workspaceAssetId: data.workspaceAssetId,
     filename: `${String(data.label || 'generated-image')}.png`,
     enabled: Boolean(selected) && Boolean(outputUrl) && !['submitting', 'in_queue', 'in_progress'].includes(status),
     onCanonicalized: useCallback((canonicalUrl: string, workspaceAssetId: string) => {

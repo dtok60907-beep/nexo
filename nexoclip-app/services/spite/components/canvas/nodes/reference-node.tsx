@@ -48,11 +48,12 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   const isVideo = !isAudio && ((data.mediaType as string) === 'video' || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(thumbnail || ''))
   const imageTrust = useImageTrust({
     url: thumbnail,
+    workspaceAssetId: data.workspaceAssetId || data.assetId,
     filename: `${String(data.label || 'reference-image')}.png`,
     enabled: Boolean(selected) && Boolean(thumbnail) && !isUploading && !isAudio && !isVideo,
     onCanonicalized: useCallback((canonicalUrl: string, workspaceAssetId: string) => {
       setThumbnail(canonicalUrl)
-      patchNodeData(id, { thumbnail: canonicalUrl, assetId: workspaceAssetId })
+      patchNodeData(id, { thumbnail: canonicalUrl, assetId: workspaceAssetId, workspaceAssetId })
     }, [id, patchNodeData]),
   })
 

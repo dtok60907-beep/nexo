@@ -6,6 +6,8 @@ import {
   importImageForTrust,
   requestBytePlusTrust,
   safeBytePlusTrustError,
+  resolveWorkspaceAssetId,
+  workspaceAssetDownloadUrl,
   workspaceAssetIdFromUrl,
   type BytePlusTrustState,
 } from '@/lib/byteplus-trust'
@@ -13,6 +15,7 @@ import {
 interface UseImageTrustOptions {
   url?: string | null
   filename?: string
+  workspaceAssetId?: unknown
   enabled?: boolean
   onCanonicalized?: (canonicalUrl: string, assetId: string) => void
 }
@@ -20,35 +23,48 @@ interface UseImageTrustOptions {
 export function useImageTrust({
   url,
   filename,
+  workspaceAssetId,
   enabled = true,
   onCanonicalized,
 }: UseImageTrustOptions) {
-  const [assetId, setAssetId] = useState<string | null>(() => workspaceAssetIdFromUrl(url))
+  const [assetId, setAssetId] = useState<string | null>(() => resolveWorkspaceAssetId(url, workspaceAssetId))
   const [state, setState] = useState<BytePlusTrustState>({ status: 'not_trusted' })
   const [inFlight, setInFlight] = useState(false)
   const requestRef = useRef(false)
+  const onCanonicalizedRef = useRef(onCanonicalized)
+  onCanonicalizedRef.current = onCanonicalized
 
   useEffect(() => {
-    const nextAssetId = workspaceAssetIdFromUrl(url)
+    const urlAssetId = workspaceAssetIdFromUrl(url)
+    const nextAssetId = resolveWorkspaceAssetId(url, workspaceAssetId)
     setAssetId(nextAssetId)
     setState({ status: 'not_trusted' })
     if (!enabled || !nextAssetId) return
 
     let cancelled = false
     requestBytePlusTrust(nextAssetId, 'GET')
-      .then(next => { if (!cancelled) setState(next) })
+      .then(next => {
+        if (cancelled) return
+        setState(next)
+        if (next.status === 'active' && !urlAssetId) {
+          onCanonicalizedRef.current?.(workspaceAssetDownloadUrl(nextAssetId), nextAssetId)
+        }
+      })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [enabled, url])
+  }, [enabled, url, workspaceAssetId])
 
   const trust = useCallback(async () => {
     if (!enabled || !url || requestRef.current || state.status === 'processing' || state.status === 'active') return
     requestRef.current = true
     setInFlight(true)
     try {
-      const imported = await importImageForTrust({ url, filename })
+      const knownAssetId = resolveWorkspaceAssetId(url, workspaceAssetId)
+      const imported = knownAssetId
+        ? { assetId: knownAssetId, canonicalUrl: workspaceAssetDownloadUrl(knownAssetId) }
+        : await importImageForTrust({ url, filename })
       setAssetId(imported.assetId)
-      if (imported.canonicalUrl !== url) onCanonicalized?.(imported.canonicalUrl, imported.assetId)
+      if (imported.canonicalUrl !== url) onCanonicalizedRef.current?.(imported.canonicalUrl, imported.assetId)
       setState(await requestBytePlusTrust(imported.assetId, 'POST'))
     } catch (error) {
       setState({
@@ -59,7 +75,7 @@ export function useImageTrust({
       requestRef.current = false
       setInFlight(false)
     }
-  }, [enabled, filename, onCanonicalized, state.status, url])
+  }, [enabled, filename, state.status, url, workspaceAssetId])
 
   useEffect(() => {
     if (!assetId || state.status !== 'processing') return

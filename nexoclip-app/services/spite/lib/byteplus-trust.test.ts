@@ -19,7 +19,9 @@ import {
   safeBytePlusTrustError,
   shouldPollBytePlusTrust,
   trustForSeedanceView,
+  workspaceAssetDownloadUrl,
   workspaceAssetIdFromUrl,
+  resolveWorkspaceAssetId,
 } from '@/lib/byteplus-trust'
 
 test('trust URL targets the unprefixed main app and encodes the asset ID', () => {
@@ -34,6 +36,15 @@ test('extracts only canonical workspace asset ids from image URLs', () => {
   assert.equal(workspaceAssetIdFromUrl('https://app.test/api/assets/2b3a6608-ff3f-45ef-a323-ec9e9e08d399/download?workspace_id=w1'), '2b3a6608-ff3f-45ef-a323-ec9e9e08d399')
   assert.equal(workspaceAssetIdFromUrl('/spite/api/r2-image/uploads/reference.png'), null)
   assert.equal(workspaceAssetIdFromUrl('asset://provider-id'), null)
+})
+
+test('recovers trusted identity from persisted node data when display URL is signed R2', () => {
+  const assetId = '2b3a6608-ff3f-45ef-a323-ec9e9e08d399'
+  const signedR2 = 'https://bucket.r2.cloudflarestorage.com/uploads/reference.png?X-Amz-Signature=secret'
+
+  assert.equal(resolveWorkspaceAssetId(signedR2, assetId), assetId)
+  assert.equal(workspaceAssetDownloadUrl(assetId), `/api/assets/${assetId}/download`)
+  assert.equal(resolveWorkspaceAssetId(signedR2, 'not-a-uuid'), null)
 })
 
 test('imports browser-readable legacy images before trust', async () => {
@@ -141,6 +152,8 @@ test('retryable GET failures remain processing and use bounded backoff', async (
 test('image generator and image reference nodes expose trust only while selected', () => {
   assert.match(imageNodeSource, /useImageTrust/)
   assert.match(referenceNodeSource, /useImageTrust/)
+  assert.match(imageNodeSource, /workspaceAssetId: data\.workspaceAssetId/)
+  assert.match(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId \|\| data\.assetId/)
   assert.match(imageNodeSource, /enabled: Boolean\(selected\).*Boolean\(outputUrl\)/)
   assert.match(referenceNodeSource, /enabled: Boolean\(selected\).*Boolean\(thumbnail\)/)
   assert.match(nodeToolbarSource, /trustAction/)
