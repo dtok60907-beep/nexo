@@ -5,12 +5,23 @@
 // Returns null if the video can't be loaded, decoded, or drawn (e.g. CORS
 // blocked, network failure, codec not supported). Caller should treat null
 // as "no thumbnail available" and fall back to a placeholder.
+export function shouldCaptureVideoThumbnail(url: string): boolean {
+  try {
+    const path = new URL(url, 'https://canvas.invalid').pathname
+    return !/^\/(?:spite\/)?api\/assets\/[^/]+\/download(?:\/|$)/.test(path)
+  } catch {
+    return false
+  }
+}
+
 export async function captureVideoThumbnail(
   url: string,
   timeSec = 0.1,
   maxWidth = 480,
 ): Promise<string | null> {
-  if (typeof document === 'undefined') return null
+  // Workspace downloads redirect to R2, whose bucket does not allow canvas
+  // reads. Trying anyway creates a CORS failure on every canvas re-render.
+  if (!shouldCaptureVideoThumbnail(url) || typeof document === 'undefined') return null
 
   return new Promise((resolve) => {
     const video = document.createElement('video')
