@@ -197,7 +197,7 @@ export function patchNode(doc: Y.Doc, nodeId: string, patch: Partial<CanvasNodeI
     }
 
     if (patch.data !== undefined) {
-      existing.set('data', ensureRecord(patch.data))
+      existing.set('data', createDataMap(patch.data))
     }
 
     for (const [key, value] of Object.entries(patch)) {
@@ -270,7 +270,7 @@ function buildNodeMap(node: CanvasNodeInput): Y.Map<unknown> {
   map.set('positionX', Number.isFinite(x) ? x : 0)
   map.set('positionY', Number.isFinite(y) ? y : 0)
 
-  map.set('data', ensureRecord(node.data))
+  map.set('data', createDataMap(node.data))
 
   for (const [key, value] of Object.entries(node)) {
     if (
@@ -297,7 +297,7 @@ function buildEdgeMap(edge: CanvasEdgeInput): Y.Map<unknown> {
   if (edge.sourceHandle !== undefined) map.set('sourceHandle', edge.sourceHandle)
   if (edge.targetHandle !== undefined) map.set('targetHandle', edge.targetHandle)
   if (edge.animated !== undefined) map.set('animated', edge.animated)
-  map.set('data', ensureRecord(edge.data))
+  map.set('data', createDataMap(edge.data))
 
   for (const [key, value] of Object.entries(edge)) {
     if (
@@ -385,6 +385,32 @@ function asNumber(value: unknown): number {
 }
 
 function ensureRecord(value: unknown): JsonRecord {
+  if (value instanceof Y.Map) {
+    return Object.fromEntries(Array.from(value.entries()).map(([key, item]) => [key, cloneYValue(item)]))
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   return { ...(value as JsonRecord) }
+}
+
+function createDataMap(value: unknown): Y.Map<unknown> {
+  const map = new Y.Map<unknown>()
+  for (const [key, item] of Object.entries(ensureRecord(value))) {
+    if (key === 'text' && typeof item === 'string') {
+      map.set(key, new Y.Text(item))
+    } else if (key === 'mentions' && Array.isArray(item)) {
+      const mentions = new Y.Array<unknown>()
+      if (item.length) mentions.insert(0, item)
+      map.set(key, mentions)
+    } else {
+      map.set(key, item)
+    }
+  }
+  return map
+}
+
+function cloneYValue(value: unknown): unknown {
+  if (value instanceof Y.Text) return value.toString()
+  if (value instanceof Y.Map) return ensureRecord(value)
+  if (value instanceof Y.Array) return value.toArray().map(cloneYValue)
+  return value
 }
