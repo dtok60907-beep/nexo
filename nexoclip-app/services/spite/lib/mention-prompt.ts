@@ -6,13 +6,14 @@ interface MentionInput {
   folderId: string
   name: string
   selectedAssetIds: string[]
+  selectedWorkspaceAssetIds?: string[]
 }
 
 interface FolderInput {
   id: string
   name: string
   type: FolderType
-  assets: { id: string; r2_url: string }[]
+  assets: { id: string; workspaceAssetId?: string; r2_url: string }[]
 }
 
 // One logical "subject" worth of reference images. For folder mentions
@@ -22,6 +23,7 @@ interface FolderInput {
 // element-based (Kling v3), and flattens them otherwise.
 export interface ReferenceGroup {
   urls: string[]
+  workspaceAssetIds: string[]
   folderName?: string
   folderType?: FolderType
 }
@@ -101,17 +103,19 @@ function collectGroups(
   const orderedFolderIds: string[] = []
   const seen = new Set<string>()
 
-  const consider = (folder: FolderInput, selectedIds?: string[]) => {
+  const consider = (folder: FolderInput, selectedIds?: string[], selectedWorkspaceIds?: string[]) => {
     if (seen.has(folder.id)) return
     const useAll = !selectedIds || selectedIds.length === 0
     const idSet = new Set(selectedIds || [])
-    const urls = folder.assets
-      .filter((a) => (useAll || idSet.has(a.id)) && !!a.r2_url)
-      .map((a) => a.r2_url)
+    const workspaceIdSet = new Set(selectedWorkspaceIds || [])
+    const selected = folder.assets
+      .filter((asset) => (useAll || idSet.has(asset.id) || (asset.workspaceAssetId && workspaceIdSet.has(asset.workspaceAssetId))) && !!asset.workspaceAssetId)
+    const urls = selected.map((asset) => `/api/assets/${encodeURIComponent(asset.workspaceAssetId!)}/download`)
     if (urls.length === 0) return
     seen.add(folder.id)
     groupsByFolderId.set(folder.id, {
       urls,
+      workspaceAssetIds: selected.map((asset) => asset.workspaceAssetId!),
       folderName: folder.name,
       folderType: folder.type,
     })
@@ -120,7 +124,7 @@ function collectGroups(
 
   for (const m of mentions) {
     const folder = folders.find((f) => f.id === m.folderId)
-    if (folder) consider(folder, m.selectedAssetIds)
+    if (folder) consider(folder, m.selectedAssetIds, m.selectedWorkspaceAssetIds)
   }
   const scanRe = /@([\w-]+)/g
   let scanMatch: RegExpExecArray | null
