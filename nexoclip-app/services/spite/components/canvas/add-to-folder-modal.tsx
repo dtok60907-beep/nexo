@@ -334,10 +334,8 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       if (!editFolder && assetUrl) {
         const generatedAsset = await registerAssetByUrl()
         if (!generatedAsset) throw new Error('generated asset is not ready')
-        if (!readyAssets.some(asset => asset.id === generatedAsset.id)) {
-          readyAssets = [...readyAssets, generatedAsset]
-          setSelectedAssets(prev => [...prev.filter(asset => asset.id !== generatedAsset.id), generatedAsset])
-        }
+        readyAssets = [...readyAssets.filter(asset => asset.id !== generatedAsset.id), generatedAsset]
+        setSelectedAssets(prev => [...prev.filter(asset => asset.id !== generatedAsset.id), generatedAsset])
       }
       const legacyAssets = readyAssets.filter(asset => !asset.workspaceAssetId)
       if (legacyAssets.length > 0) {

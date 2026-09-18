@@ -34,6 +34,11 @@ test('canonical workspace images skip cross-origin byte downloads when added to 
   assert.match(folderModal, /if \(canonicalAssetId\) return \{ id: legacyId, workspaceAssetId: canonicalAssetId, url: assetUrl \}/)
 })
 
+test('canonical import replaces the matching legacy selection', () => {
+  assert.match(folderModal, /readyAssets = \[\.\.\.readyAssets\.filter\(asset => asset\.id !== generatedAsset\.id\), generatedAsset\]/)
+  assert.doesNotMatch(folderModal, /if \(!readyAssets\.some\(asset => asset\.id === generatedAsset\.id\)\)/)
+})
+
 test('folder modal registers an unindexed generated output and uses the resolved asset id', () => {
   assert.match(folderModal, /registerAssetByUrl/)
   assert.doesNotMatch(folderModal, /if \(!assetId\) return/)
