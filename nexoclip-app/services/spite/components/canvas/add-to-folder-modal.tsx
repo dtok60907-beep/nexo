@@ -1,6 +1,7 @@
 'use client'
 
 import { withBasePath } from '@/lib/base-path'
+import { workspaceAssetIdFromUrl } from '@/lib/byteplus-trust'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -110,7 +111,13 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       }
       if (!legacyId) throw new Error('asset registration returned no id')
 
-      // Every folder path, including assetId+assetUrl callers, must import to
+      // Durable generation URLs already identify the canonical workspace
+      // asset. Reuse that identity instead of downloading it cross-origin;
+      // Railway's HTTP service intentionally does not grant browser CORS.
+      const canonicalAssetId = workspaceAssetIdFromUrl(assetUrl)
+      if (canonicalAssetId) return { id: legacyId, workspaceAssetId: canonicalAssetId, url: assetUrl }
+
+      // Every legacy folder path, including assetId+assetUrl callers, must import to
       // the durable workspace Assets library. Exact-byte reuse avoids copies.
       const source = await fetch(assetUrl)
       if (!source.ok) throw new Error(`asset download returned ${source.status}`)

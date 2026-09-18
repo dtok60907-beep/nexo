@@ -23,10 +23,16 @@ test('image generation node exposes generated output to the folder modal', () =>
   assert.match(imageNode, /<AddToFolderModal[\s\S]*?assetUrl=\{outputUrl\}/)
 })
 
+test('canonical workspace images skip cross-origin byte downloads when added to a folder', () => {
+  assert.match(folderModal, /workspaceAssetIdFromUrl/)
+  assert.match(folderModal, /const canonicalAssetId = workspaceAssetIdFromUrl\(assetUrl\)/)
+  assert.match(folderModal, /if \(canonicalAssetId\) return \{ id: legacyId, workspaceAssetId: canonicalAssetId, url: assetUrl \}/)
+})
+
 test('folder modal registers an unindexed generated output and uses the resolved asset id', () => {
   assert.match(folderModal, /registerAssetByUrl/)
   assert.doesNotMatch(folderModal, /if \(!assetId\) return/)
-  assert.match(folderModal, /const resolvedAssetId = assetUrl[\s\S]*?await registerAssetByUrl\(\)/)
+  assert.match(folderModal, /const resolvedAsset = assetUrl[\s\S]*?await registerAssetByUrl\(\)/)
   assert.match(folderModal, /addAssetIds: \[resolvedAssetId\]/)
 })
 
