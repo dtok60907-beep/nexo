@@ -134,8 +134,11 @@ function mapLegacyParameters(body: Record<string, unknown>, kind: 'image' | 'vid
   if (tenantReferences.some((url) => !/^\/api\/assets\/[^/]+\/download(?:\?|$)/.test(url) && !isLegacyCanvasReference(url))) {
     throw Object.assign(new Error('Video references must be tenant assets or owned Canvas references'), { status: 400 })
   }
-  const parameters: Record<string, unknown> = {}
-  for (const key of ['aspectRatio', 'resolution', 'seed']) if (settings[key] !== undefined && settings[key] !== '') parameters[key] = settings[key]
+  if (settings.aspectRatio !== undefined && settings.aspectRatio !== '' && settings.aspectRatio !== '9:16') {
+    throw Object.assign(new Error('Video generation is portrait-only (9:16).'), { status: 400 })
+  }
+  const parameters: Record<string, unknown> = { aspectRatio: '9:16' }
+  for (const key of ['resolution', 'seed']) if (settings[key] !== undefined && settings[key] !== '') parameters[key] = settings[key]
   if (settings.duration !== undefined) parameters.duration = Number.parseInt(String(settings.duration), 10)
   if (referenceImages.length) parameters.referenceImages = referenceImages
   if (videoUrl) parameters.referenceVideos = [videoUrl]
