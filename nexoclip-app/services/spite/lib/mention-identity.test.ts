@@ -30,6 +30,17 @@ test('mentions resolve through canonical workspace asset IDs rather than legacy 
   assert.deepEqual(result.refGroups[0].workspaceAssetIds, ['workspace-nathan'])
 })
 
+test('legacy-only mentions report the folder that needs canonical import', () => {
+  const result = compileMentionsForModel(
+    '@Buratna walks into frame',
+    [{ folderId: 'buratna', name: 'Buratna', selectedAssetIds: ['legacy-buratna'] }],
+    [{ id: 'buratna', name: 'Buratna', type: 'character', assets: [{ id: 'legacy-buratna', r2_url: '/spite/api/r2-image/buratna.png' }] }],
+    model,
+  )
+  assert.deepEqual(result.needsCanonicalImport, ['Buratna'])
+  assert.deepEqual(result.refGroups, [])
+})
+
 test('character mentions demand the exact same identity', () => {
   const result = compile('character')
   assert.equal(result.refGroups.length, 1)

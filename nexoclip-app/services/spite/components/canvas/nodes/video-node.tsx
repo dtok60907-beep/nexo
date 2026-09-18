@@ -793,6 +793,11 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
       referenceGroups.length,
     )
     referenceGroups.push(...compiled.refGroups)
+    if (compiled.needsCanonicalImport.length > 0) {
+      setError(`Import and Trust these legacy reference folders before generating: ${compiled.needsCanonicalImport.join(', ')}`)
+      setStatus('idle')
+      return
+    }
 
     // Models whose references go to a SEPARATE endpoint (Seedance 2.0's
     // reference-to-video) cannot also take a first/end frame — fal's
