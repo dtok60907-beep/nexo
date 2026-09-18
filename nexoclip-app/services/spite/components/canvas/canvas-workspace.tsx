@@ -1005,9 +1005,11 @@ function CanvasInner({ projectId }: { projectId: string }) {
   const lockedNodeMembershipKey = useMemo(() => {
     const locks = new Set<string>()
     for (const peer of remotePresence) {
-      if (peer.lock?.nodeId) {
-        locks.add(peer.lock.nodeId)
-      }
+      // Drag locks and focused editors are both exclusive node ownership
+      // signals. Awareness gives peers immediate UI blocking; the server
+      // lease still resolves races when a mutation is claimed.
+      if (peer.lock?.nodeId) locks.add(peer.lock.nodeId)
+      if (peer.editing?.nodeId) locks.add(peer.editing.nodeId)
     }
     return Array.from(locks).sort().join('\u0000')
   }, [remotePresence])
@@ -1068,6 +1070,12 @@ function CanvasInner({ projectId }: { projectId: string }) {
       return {
         ...nextNode,
         draggable: false,
+        selectable: false,
+        connectable: false,
+        deletable: false,
+        // React Flow-level interaction and every nested toolbar/control are
+        // blocked for a remote owner. Realtime document updates still render.
+        style: { ...node.style, pointerEvents: 'none' },
         className: `${node.className ?? ''} ring-2 ring-amber-400/70 ring-offset-1 ring-offset-[#080A0C]`,
       }
     })
