@@ -26,6 +26,17 @@ test('an editing guest accepts remote chip metadata when its visible text is unc
   }), true)
 })
 
+test('a stale collaboration echo cannot remove a locally inserted mention chip', () => {
+  assert.equal(shouldApplyRemoteMentionState({
+    editing: true,
+    pendingLocalStateKey: mentionStateKey('Use @Nathan', nathan),
+    localText: 'Use @Nathan',
+    localMentions: nathan,
+    incomingText: 'Use @Nathan',
+    incomingMentions: noMentions,
+  }), false)
+})
+
 test('an editing guest does not clobber divergent local text', () => {
   assert.equal(shouldApplyRemoteMentionState({
     editing: true,

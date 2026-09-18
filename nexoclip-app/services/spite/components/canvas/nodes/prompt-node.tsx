@@ -10,7 +10,7 @@ import { MentionTextarea, type Mention, type MentionTextareaRef } from '../menti
 import { useProjectFolders } from '@/hooks/use-project-folders'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { createLocalStateSyncGuard } from '@/lib/local-state-sync'
-import { shouldApplyRemoteMentionState } from '@/lib/mention-state'
+import { mentionStateKey, shouldApplyRemoteMentionState } from '@/lib/mention-state'
 
 function HandleIcon({ icon: Icon, color, style }: { icon: React.ElementType; color: string; style?: React.CSSProperties }) {
   return (
@@ -50,12 +50,18 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
   const cardRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<MentionTextareaRef>(null)
   const syncGuardRef = useRef(createLocalStateSyncGuard())
+  const pendingLocalStateKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const incomingText = (data.text as string) || ''
     const incomingMentions = (data.mentions as Mention[]) || []
+    const incomingStateKey = mentionStateKey(incomingText, incomingMentions)
+    if (!editing || pendingLocalStateKeyRef.current === incomingStateKey) {
+      pendingLocalStateKeyRef.current = null
+    }
     if (!shouldApplyRemoteMentionState({
       editing,
+      pendingLocalStateKey: pendingLocalStateKeyRef.current,
       localText: text,
       localMentions: mentions,
       incomingText,
@@ -72,6 +78,7 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
     syncGuardRef.current.beginUserEdit()
     setText(nextText)
     setMentions(nextMentions)
+    pendingLocalStateKeyRef.current = mentionStateKey(nextText, nextMentions)
     if (!syncGuardRef.current.allowsPersistence()) return
     patchNodeData(id, { text: nextText, mentions: nextMentions })
   }, [id, patchNodeData])
