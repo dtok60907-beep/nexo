@@ -152,7 +152,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const [colormap, setColormap] = useState<string>((data.colormap as string) || 'grayscale')
   const [modelId, setModelId] = useState((data.modelId as string) || 'seedance-1.5')
   const [duration, setDuration] = useState((data.duration as string) || '')
-  const [aspectRatio, setAspectRatio] = useState((data.aspectRatio as string) || '')
+  const [aspectRatio, setAspectRatio] = useState('9:16')
   const [resolution, setResolution] = useState((data.resolution as string) || '')
   const [enableAudio, setEnableAudio] = useState((data.enableAudio as boolean) || false)
   const [enableLoop, setEnableLoop] = useState((data.enableLoop as boolean) || false)
@@ -259,7 +259,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     setColormap((data.colormap as string) || 'grayscale')
     setModelId((data.modelId as string) || 'seedance-1.5')
     setDuration((data.duration as string) || '')
-    setAspectRatio((data.aspectRatio as string) || '')
+    setAspectRatio('9:16')
     setResolution((data.resolution as string) || '')
     setEnableAudio((data.enableAudio as boolean) || false)
     setEnableLoop((data.enableLoop as boolean) || false)
@@ -1000,7 +1000,6 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
 
   // Build options from current model's config
   const modelOptions = VIDEO_MODELS.map(m => ({ value: m.id, label: m.name }))
-  const aspectOptions = currentModel?.aspectRatios.map(a => ({ value: a, label: a })) || []
   const durationOptions = currentModel?.durations?.map(d => ({ value: d, label: d })) || []
   const resolutionOptions = currentModel?.resolutions?.map(r => ({ value: r, label: r })) || []
 
@@ -1252,7 +1251,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
               onChange={(value) => {
                 syncGuardRef.current.beginUserEdit()
                 const nextModel = getModelById(value)
-                const nextAspectRatio = nextModel?.defaultAspectRatio || ''
+                const nextAspectRatio = '9:16'
                 const nextDuration = nextModel?.defaultDuration || ''
                 const nextResolution = nextModel?.defaultResolution || ''
                 setModelId(value)
@@ -1319,20 +1318,6 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
                   syncGuardRef.current.beginUserEdit()
                   setDuration(value)
                   patchPersistedNodeData({ duration: value })
-                }}
-                disabled={isGenerating}
-              />
-            )}
-            
-            {/* Aspect ratio */}
-            {aspectOptions.length > 0 && (
-              <ControlSelect 
-                value={aspectRatio || currentModel?.defaultAspectRatio || ''} 
-                options={aspectOptions}
-                onChange={(value) => {
-                  syncGuardRef.current.beginUserEdit()
-                  setAspectRatio(value)
-                  patchPersistedNodeData({ aspectRatio: value })
                 }}
                 disabled={isGenerating}
               />
