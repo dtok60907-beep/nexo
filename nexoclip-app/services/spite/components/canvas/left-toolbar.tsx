@@ -6,6 +6,7 @@ import {
   applyBytePlusTrustState,
   bytePlusTrustPollDelay,
   importImageForTrust,
+  mergeAssetPreservingBytePlusTrust,
   type BytePlusTrustState,
   requestBytePlusTrust,
   safeBytePlusTrustError,
@@ -334,10 +335,11 @@ export function LeftToolbar({
 
   // Keep selectedGenAsset in sync with latest data from SWR
   useEffect(() => {
-    if (selectedGenAsset) {
-      const updated = generatedAssets.find(a => a.id === selectedGenAsset.id)
-      if (updated) setSelectedGenAsset(updated)
-    }
+    setSelectedGenAsset(current => {
+      if (!current) return current
+      const updated = generatedAssets.find(asset => asset.id === current.id)
+      return updated ? mergeAssetPreservingBytePlusTrust(current, updated) : current
+    })
   }, [generatedAssets])
 
   const setTrustState = (assetId: string, state: BytePlusTrustState, revalidate = false) => {

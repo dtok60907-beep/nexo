@@ -113,6 +113,15 @@ export function shouldPollBytePlusTrust({
   return documentVisible && detailVisible && type === 'image' && status === 'processing'
 }
 
+export function mergeAssetPreservingBytePlusTrust<T extends { id: string; byteplus_trust?: BytePlusTrustState }>(
+  current: T,
+  refreshed: T,
+): T {
+  return refreshed.byteplus_trust || !current.byteplus_trust
+    ? refreshed
+    : { ...refreshed, byteplus_trust: current.byteplus_trust }
+}
+
 export function applyBytePlusTrustState<T extends { id: string; byteplus_trust?: BytePlusTrustState }>(
   assets: T[] | undefined,
   assetId: string,
