@@ -191,6 +191,15 @@ test('both detail layouts wire the shared trust action to the selected asset in-
   assert.match(toolbarSource, /trustRequestsRef\.current\.delete\(asset\.id\)/)
 })
 
+test('opening a canonical active asset revalidates provider trust instead of trusting cached state', () => {
+  const validationEffect = toolbarSource.slice(
+    toolbarSource.indexOf('const workspaceAssetId = workspaceAssetIdFromUrl'),
+    toolbarSource.indexOf('// Listen for asset status changes'),
+  )
+  assert.match(validationEffect, /requestBytePlusTrust\(workspaceAssetId, 'GET'\)/)
+  assert.doesNotMatch(validationEffect, /asset\.byteplus_trust \|\|/)
+})
+
 test('processing trust polling uses one recursive timeout with cleanup, not an overlapping interval', () => {
   const pollingEffect = toolbarSource.slice(
     toolbarSource.indexOf('if (!shouldPollBytePlusTrust'),
