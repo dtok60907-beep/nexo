@@ -22,7 +22,7 @@ test('durable video handler submits, polls, downloads, and persists a tenant ass
   assert.equal(puts.length, 1);
 });
 
-function trustedHandler({ links = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {} } = {}) {
+function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {} } = {}) {
   const submitted = [];
   const downloads = [];
   const lookups = [];
@@ -50,6 +50,7 @@ function trustedHandler({ links = {}, model = 'bytedance/seedance-2.5', env = {}
       const link = links[`${workspaceId}:${assetId}`];
       return link ? { project_name: env.BYTEPLUS_PROJECT_NAME || 'default', ...link } : null;
     },
+    findExactTrustedAsset: async ({ excludeAssetId }) => exactMatches[excludeAssetId] || null,
     createAsset: async () => ({ id: 'output-1' }),
     sleep: async () => {},
     env,
@@ -108,6 +109,18 @@ test('known BytePlus image deployment endpoint retains raw resolution', async ()
 
   assert.match(request.referenceImages[0], /^data:image\/png;base64,/);
   assert.deepEqual(setup.lookups, []);
+});
+
+test('an exact-byte duplicate reuses the original trusted provider asset', async () => {
+  const setup = trustedHandler({
+    exactMatches: { 'asset-1': { id: 'trusted-original', provider_asset_id: 'provider-1' } },
+  });
+
+  const request = await runTrusted(setup, { referenceImages: [assetUrl('asset-1')] });
+
+  assert.deepEqual(request.referenceImages, ['asset://provider-1']);
+  assert.equal(isTrustedAssetRequest(request), true);
+  assert.equal(setup.downloads.length, 1);
 });
 
 test('missing mapping retains raw data URL behavior', async () => {

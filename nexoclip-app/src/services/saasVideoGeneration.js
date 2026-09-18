@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { findExactTrustedWorkspaceAsset } from './assetService.js';
 import { createProviderRouter, markTrustedAssetRequest } from '../providers/providerRouter.js';
 import { createGeneratedAsset } from '../repositories/assetMetadataRepository.js';
 import { findBytePlusAssetLink as findStoredBytePlusAssetLink } from '../repositories/byteplusAssetRepository.js';
@@ -40,7 +41,7 @@ function videoRequest(job, { referenceImages, frameImages, referenceVideos }) {
   };
 }
 
-export function createSaasVideoHandler({ pool, storage, referenceStorage = storage, providerRouter, findBytePlusAssetLink = findStoredBytePlusAssetLink, env = process.env, createAsset = createGeneratedAsset, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollIntervalMs = 5_000, maxPolls = 120 }) {
+export function createSaasVideoHandler({ pool, storage, referenceStorage = storage, providerRouter, findBytePlusAssetLink = findStoredBytePlusAssetLink, findExactTrustedAsset = findExactTrustedWorkspaceAsset, env = process.env, createAsset = createGeneratedAsset, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollIntervalMs = 5_000, maxPolls = 120 }) {
   if (!pool || !storage || !providerRouter) throw new TypeError('pool, storage, and provider router are required');
   return async (job) => {
     let hasTrustedAsset = false;
@@ -61,7 +62,17 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
         throw trustedAssetError(link.status);
       }
       : undefined;
-    const resolution = { workspaceId: job.workspace_id, pool, storage, referenceStorage, resolveWorkspaceAsset };
+    const resolveWorkspaceAssetContent = resolveWorkspaceAsset
+      ? async ({ workspaceId, assetId, body, contentType }) => {
+        const match = await findExactTrustedAsset({
+          workspaceId, body, contentType, excludeAssetId: assetId, projectName,
+        }, storage, pool);
+        if (!match?.provider_asset_id?.trim()) return null;
+        hasTrustedAsset = true;
+        return `asset://${match.provider_asset_id.trim()}`;
+      }
+      : undefined;
+    const resolution = { workspaceId: job.workspace_id, pool, storage, referenceStorage, resolveWorkspaceAsset, resolveWorkspaceAssetContent };
     const referenceImages = await resolveReferenceImages({ ...resolution, referenceImages: job.parameters?.referenceImages });
     const frameImages = await resolveReferenceImages({ ...resolution, referenceImages: (job.parameters?.frameImages || []).map((frame) => frame.url) });
     const referenceVideos = await resolveReferenceImages({ workspaceId: job.workspace_id, referenceImages: job.parameters?.referenceVideos, pool, storage, referenceStorage });

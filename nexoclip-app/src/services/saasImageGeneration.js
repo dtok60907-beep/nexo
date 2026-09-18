@@ -17,7 +17,7 @@ function legacyR2Key(reference) {
   }
 }
 
-export async function resolveReferenceImages({ workspaceId, referenceImages, pool, storage, referenceStorage = storage, resolveWorkspaceAsset }) {
+export async function resolveReferenceImages({ workspaceId, referenceImages, pool, storage, referenceStorage = storage, resolveWorkspaceAsset, resolveWorkspaceAssetContent }) {
   if (!referenceImages?.length) return [];
   return Promise.all(referenceImages.map(async (reference) => {
     if (typeof reference !== 'string' || /^\s*asset:\/\//i.test(reference)) throw Object.assign(new Error('Invalid asset reference'), { code: 'INVALID_REFERENCE_IMAGE' });
@@ -45,6 +45,11 @@ export async function resolveReferenceImages({ workspaceId, referenceImages, poo
     if (resolved) return resolved;
     const download = await storage.createDownloadUrl({ key: asset.storage_key });
     const object = await storage.get(download.url || download);
+    const resolvedByContent = await resolveWorkspaceAssetContent?.({
+      workspaceId, assetId, asset, body: object.body,
+      contentType: object.contentType || asset.content_type,
+    });
+    if (resolvedByContent) return resolvedByContent;
     return dataUrl(object.body, object.contentType || asset.content_type);
   }));
 }
