@@ -707,7 +707,7 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
                   <Button
                     size="sm"
                     onClick={handleSave}
-                    disabled={!newName.trim() || creating}
+                    disabled={!newName.trim() || creating || (!assetUrl && selectedAssets.length === 0)}
                     className="bg-white/10 hover:bg-white/20"
                   >
                     {creating ? (editFolder ? 'Saving...' : 'Creating...') : (editFolder ? 'Save' : 'Create')}

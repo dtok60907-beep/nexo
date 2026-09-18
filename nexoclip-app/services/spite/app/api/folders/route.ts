@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db'
 import { v4 as uuidv4 } from 'uuid'
 import { ensureFoldersSchema } from '@/lib/folders-schema'
 import { getAuthenticatedUser } from '@/lib/main-session'
+import { foldersWithUsableAssets } from '@/lib/folder-visibility'
 import {
   assetNotFoundResponse,
   countOwnedGenerationAssetsForProject,
@@ -93,10 +94,10 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
           })
         }
 
-        const result = folders.map(f => ({
+        const result = foldersWithUsableAssets(folders.map(f => ({
           ...f,
           assets: itemsByFolder.get(String(f.id)) || [],
-        }))
+        })))
 
         console.log('[folders] GET', { projectId, type, returned: result.length })
         return NextResponse.json(result)
@@ -129,6 +130,9 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
         }
 
         const normalizedAssetIds = normalizeAssetIds(assetIds)
+        if (normalizedAssetIds.length === 0) {
+          return NextResponse.json({ error: 'At least one asset is required' }, { status: 400 })
+        }
         if (
           normalizedAssetIds.length > 0 &&
           (await countOwnedGenerationAssetsForProject(sql, user.id, projectId, normalizedAssetIds)) !== normalizedAssetIds.length

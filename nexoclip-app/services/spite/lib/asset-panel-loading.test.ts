@@ -6,10 +6,16 @@ const toolbarSource = readFileSync(
   new URL('../components/canvas/left-toolbar.tsx', import.meta.url),
   'utf8',
 )
+const mentionFoldersSource = readFileSync(
+  new URL('../hooks/use-project-folders.ts', import.meta.url),
+  'utf8',
+)
 
 test('folder data relies on change events instead of five-second polling', () => {
   assert.doesNotMatch(toolbarSource, /refreshInterval:\s*5000/)
   assert.match(toolbarSource, /window\.addEventListener\('folders-changed'/)
+  assert.doesNotMatch(mentionFoldersSource, /refreshInterval/)
+  assert.match(mentionFoldersSource, /window\.addEventListener\('folders-changed'/)
 })
 
 test('every asset panel image preview is lazy and asynchronously decoded', () => {
