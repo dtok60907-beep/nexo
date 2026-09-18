@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
+import { useParams } from 'next/navigation'
 
 import { useCanvasCollaboration } from '../canvas-collaboration'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 import { clampNodeSize } from '@/lib/canvas-node-interactions'
 
 type NodeData = Record<string, unknown>
@@ -43,6 +45,8 @@ export function ResizableNodeFrame({
   children,
 }: ResizableNodeFrameProps) {
   const { patchNodeData } = useCanvasCollaboration()
+  const projectId = useParams().id as string | undefined
+  const nodeLock = useNodeOwnershipLock(projectId, nodeId)
   const { minWidth, minHeight, maxWidth, maxHeight } = bounds
   const sizeFromData = clampNodeSize({
     width: typeof data.width === 'number' ? data.width : defaultSize.width,
@@ -57,9 +61,10 @@ export function ResizableNodeFrame({
     setSize(sizeFromData)
   }, [data.height, data.width, defaultSize.height, defaultSize.width, maxHeight, maxWidth, minHeight, minWidth])
 
-  const startResize = (event: PointerEvent<HTMLDivElement>) => {
+  const startResize = async (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     event.stopPropagation()
+    if (!(await nodeLock.claim())) return
     resizeRef.current = createResizeSession(event.pointerId, event.clientX, event.clientY, sizeRef.current)
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -84,6 +89,7 @@ export function ResizableNodeFrame({
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     patchNodeData(nodeId, sizeRef.current)
+    nodeLock.release()
   }
 
   const cancelResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -93,10 +99,20 @@ export function ResizableNodeFrame({
     resizeRef.current = finalization.session
     sizeRef.current = finalization.size
     setSize(finalization.size)
+    nodeLock.release()
   }
 
   return (
-    <div className={`relative group ${className ?? ''}`} style={size}>
+    <div
+      className={`relative group ${className ?? ''}`}
+      style={size}
+      onPointerDownCapture={(event) => {
+        if (nodeLock.owned) return
+        event.preventDefault()
+        event.stopPropagation()
+        void nodeLock.claim()
+      }}
+    >
       {children}
       <div
         aria-label="Resize node"

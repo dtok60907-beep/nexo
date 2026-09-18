@@ -318,6 +318,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const presenceControllerRef = useRef<ReturnType<typeof createPresenceController> | null>(null)
   const selectedSceneNodeIdsRef = useRef<string[]>([])
+  const lockedNodeIdsRef = useRef<Set<string>>(new Set())
   const [presenceNow, setPresenceNow] = useState(() => Date.now())
   // Connector-animation preference (Settings → Performance). Read on mount and
   // kept live via the broadcast event so toggling it reflects without reload.
@@ -526,7 +527,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
     if (!allowDocumentMutation) {
       return
     }
-    if ((params.source && lockedNodeIds.has(params.source)) || (params.target && lockedNodeIds.has(params.target))) {
+    if ((params.source && lockedNodeIdsRef.current.has(params.source)) || (params.target && lockedNodeIdsRef.current.has(params.target))) {
       toast.error('This node is being edited by another collaborator')
       return
     }
@@ -549,7 +550,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
         duration: 3000,
       })
     }
-  }, [allowDocumentMutation, commands, lockedNodeIds, updateNodeInternals])
+  }, [allowDocumentMutation, commands, updateNodeInternals])
   
   const [minimapOpen, setMinimapOpen] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowPos: { x: number; y: number } } | null>(null)
@@ -1021,6 +1022,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
     () => new Set(lockedNodeMembershipKey ? lockedNodeMembershipKey.split('\u0000') : []),
     [lockedNodeMembershipKey],
   )
+  lockedNodeIdsRef.current = lockedNodeIds
 
   const onNodeDrag = useCallback((_event: any, node: Node) => {
     const others = (nodes as Node[]).filter(n => n.id !== node.id)
@@ -1079,7 +1081,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
         deletable: false,
         // React Flow-level interaction and every nested toolbar/control are
         // blocked for a remote owner. Realtime document updates still render.
-        style: { ...node.style, pointerEvents: 'none' },
+        style: { ...node.style, pointerEvents: 'none' as const },
         className: `${node.className ?? ''} ring-2 ring-amber-400/70 ring-offset-1 ring-offset-[#080A0C]`,
       }
     })
@@ -1277,11 +1279,13 @@ function CanvasInner({ projectId }: { projectId: string }) {
                 // Peers see it through awareness and their wrapper becomes
                 // pointer-events:none; server lease remains the mutation gate.
                 presenceControllerRef.current?.startDragLock(node.id)
+                window.dispatchEvent(new CustomEvent('canvas-node-active', { detail: node.id }))
                 window.dispatchEvent(new Event('closeStickerPickers'))
               }}
               onPaneClick={(e) => {
                 // Leaving a node releases its transient interaction lock.
                 presenceControllerRef.current?.stopDragLock()
+                window.dispatchEvent(new CustomEvent('canvas-node-active', { detail: null }))
                 // Always close any open sticker pickers
                 window.dispatchEvent(new Event('closeStickerPickers'))
 

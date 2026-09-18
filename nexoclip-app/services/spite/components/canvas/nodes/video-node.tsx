@@ -14,6 +14,7 @@ import { labelFromPrompt, DEFAULT_VIDEO_LABEL } from '@/lib/auto-name'
 import { getVideoModels, getModelById, buildModelInput, type ModelConfig } from '@/lib/fal-models'
 import { estimateGenerationCost, formatUSD, COST_CONFIRM_THRESHOLD_USD } from '@/lib/fal-cost'
 import { resolveNodeMediaUrl } from '@/lib/node-media'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 import { compileMentionsForModel } from '@/lib/mention-prompt'
 import { useProjectFolders } from '@/hooks/use-project-folders'
 import { completeGenerationNode } from '@/lib/generation-node'
@@ -140,6 +141,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   // Route segment is [id], so the param is `id` (not `projectId`).
   const projectId = params.id as string
+  const nodeLock = useNodeOwnershipLock(projectId, id)
   // Upscaler mode (only meaningful when modelId is 'topaz-video-upscale').
   // 'standard' hits the plug-n-play endpoint; 'creative' hits the
   // prompt-aware variant. Persists in node data so it survives reload.
@@ -648,6 +650,10 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleGenerate = async () => {
+    if (!(await nodeLock.claim())) {
+      toast.error(nodeLock.error || 'Node sedang dikerjakan user lain.')
+      return
+    }
     const { connected, prompt: compiledPrompt } = resolveIncomingPrompt(id, getNodes(), getEdges())
     if (!connected) {
       setError('Connect a Text node first')
@@ -1004,7 +1010,16 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const resolutionOptions = currentModel?.resolutions?.map(r => ({ value: r, label: r })) || []
 
   return (
-    <div className="relative group" style={{ width: 360 }}>
+    <div
+      className="relative group"
+      style={{ width: 360 }}
+      onPointerDownCapture={(event) => {
+        if (nodeLock.owned) return
+        event.preventDefault()
+        event.stopPropagation()
+        void nodeLock.claim()
+      }}
+    >
       <NodeActionToolbar
         nodeId={id}
         selected={selected}

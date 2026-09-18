@@ -16,6 +16,7 @@ import { folderMediaLabel } from '@/lib/canvas-media-label'
 import { getImageModels, getModelById, buildModelInput, type ModelConfig } from '@/lib/fal-models'
 import { estimateGenerationCost, formatUSD, COST_CONFIRM_THRESHOLD_USD } from '@/lib/fal-cost'
 import { resolveNodeMediaUrl } from '@/lib/node-media'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 import { compileMentionsForModel } from '@/lib/mention-prompt'
 import { useProjectFolders } from '@/hooks/use-project-folders'
 import { useImageTrust } from '@/hooks/use-image-trust'
@@ -142,6 +143,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   // Route segment is [id], so the param is `id` (not `projectId`).
   const projectId = params.id as string
+  const nodeLock = useNodeOwnershipLock(projectId, id)
   const [modelId, setModelId] = useState((data.modelId as string) || 'nano-banana-pro')
   const [aspectRatio, setAspectRatio] = useState((data.aspectRatio as string) || '')
   const [resolution, setResolution] = useState((data.resolution as string) || '')
@@ -659,6 +661,10 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleGenerate = async () => {
+    if (!(await nodeLock.claim())) {
+      toast.error(nodeLock.error || 'Node sedang dikerjakan user lain.')
+      return
+    }
     const { connected, prompt: compiledPrompt } = resolveIncomingPrompt(id, getNodes(), getEdges())
     if (!connected) {
       setError('Connect a Text node first')
@@ -965,6 +971,12 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     <div
       className="relative group"
       style={{ width: 360 }}
+      onPointerDownCapture={(event) => {
+        if (nodeLock.owned) return
+        event.preventDefault()
+        event.stopPropagation()
+        void nodeLock.claim()
+      }}
     >
       <NodeActionToolbar
         nodeId={id}
