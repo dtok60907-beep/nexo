@@ -85,6 +85,15 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
     const referenceImages = await resolveReferenceImages({ ...resolution, referenceImages: job.parameters?.referenceImages });
     const frameImages = await resolveReferenceImages({ ...resolution, referenceImages: (job.parameters?.frameImages || []).map((frame) => frame.url) });
     const referenceVideos = await resolveReferenceImages({ workspaceId: job.workspace_id, referenceImages: job.parameters?.referenceVideos, pool, storage, referenceStorage });
+    if (isDirectBytePlusSeedance(job.model, env)) {
+      const rawReference = [...referenceImages, ...frameImages, ...referenceVideos]
+        .find((reference) => !reference.startsWith('asset://'));
+      if (rawReference) {
+        throw Object.assign(new Error('Every Seedance reference must be an active Trusted Asset. Import it into Assets and use Trust for Seedance before generating.'), {
+          code: 'BYTEPLUS_REFERENCE_NOT_TRUSTED', status: 422,
+        });
+      }
+    }
     const request = videoRequest(job, { referenceImages, frameImages, referenceVideos });
     const submitted = await providerRouter.submitVideo(hasTrustedAsset ? markTrustedAssetRequest(request) : request);
     const provider = submitted.provider || 'openrouter';
