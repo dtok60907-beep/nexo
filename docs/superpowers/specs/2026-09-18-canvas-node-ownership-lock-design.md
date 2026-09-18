@@ -22,6 +22,8 @@ A failed claim returns conflict status and owner-safe UI messaging. The server d
 
 Canvas claims a node lock synchronously at the start of an interactive gesture. Until successful, it does not write node state. For lock owner, interactions continue normally and a heartbeat runs for as long as the interaction/editor remains active.
 
+The owner also publishes `{ activeNodeId, mode }` through existing Yjs awareness/presence. Other clients receive the state immediately and render that node as view-only before a gesture can begin. Awareness is only UI state: disconnect/reconnect can discard it, while the server lease remains the authority used to accept or deny claims.
+
 For every non-owner, a locked node is view-only:
 
 - no drag or resize;
