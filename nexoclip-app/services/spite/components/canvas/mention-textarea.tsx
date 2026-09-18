@@ -25,7 +25,7 @@ export interface MentionFolder {
   id: string
   name: string
   type: FolderType
-  assets: { id: string; r2_url: string; type: 'image' | 'video' | 'audio' }[]
+  assets: { id: string; workspaceAssetId?: string; r2_url: string; type: 'image' | 'video' | 'audio' }[]
 }
 
 // One inserted mention: a folder + the subset of its assets the user chose.
@@ -36,6 +36,7 @@ export interface Mention {
   folderId: string
   name: string
   selectedAssetIds: string[]
+  selectedWorkspaceAssetIds?: string[]
 }
 
 export interface MentionTextareaRef {
@@ -98,10 +99,11 @@ function serializeEditor(el: HTMLElement): { text: string; mentions: Mention[] }
         const folderId = e.dataset.folderId || ''
         const name = e.dataset.name || ''
         const assetIds = (e.dataset.assetIds || '').split(',').filter(Boolean)
+        const workspaceAssetIds = (e.dataset.workspaceAssetIds || '').split(',').filter(Boolean)
         text += `@${tagFromName(name)}`
         if (folderId && !seen.has(folderId)) {
           seen.add(folderId)
-          mentions.push({ folderId, name, selectedAssetIds: assetIds })
+          mentions.push({ folderId, name, selectedAssetIds: assetIds, selectedWorkspaceAssetIds: workspaceAssetIds })
         }
       } else if (e.tagName === 'BR') {
         text += '\n'
@@ -127,6 +129,7 @@ function makeChipElement(
   folder: MentionFolder | { id: string; name: string; type: FolderType },
   selectedAssetIds: string[],
   doc: Document,
+  selectedWorkspaceAssetIds: string[] = [],
 ): HTMLSpanElement {
   const span = doc.createElement('span')
   span.dataset.mention = '1'
@@ -134,6 +137,7 @@ function makeChipElement(
   span.dataset.name = folder.name
   span.dataset.type = folder.type
   span.dataset.assetIds = selectedAssetIds.join(',')
+  span.dataset.workspaceAssetIds = selectedWorkspaceAssetIds.join(',')
   span.contentEditable = 'false'
   const cls = COLOR[folder.type]
   span.className =
@@ -189,7 +193,14 @@ function renderInitial(
           selectedAssetIds:
             'assets' in folder ? folder.assets.map((a) => a.id) : [],
         }
-      el.appendChild(makeChipElement(folder, m.selectedAssetIds, document))
+      const selectedLegacyIds = new Set(m.selectedAssetIds)
+      const derivedWorkspaceIds = 'assets' in folder
+        ? folder.assets
+            .filter((asset) => selectedLegacyIds.size === 0 || selectedLegacyIds.has(asset.id))
+            .map((asset) => asset.workspaceAssetId)
+            .filter((id): id is string => Boolean(id))
+        : []
+      el.appendChild(makeChipElement(folder, m.selectedAssetIds, document, m.selectedWorkspaceAssetIds || derivedWorkspaceIds))
     } else {
       // Unresolved tag — keep the literal text so the user can fix it.
       el.appendChild(document.createTextNode(match[0]))
@@ -659,7 +670,7 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
   // Changes apply immediately (no Cancel/Apply — the chip's dataset is
   // mutated in place). Remove button strips the mention entirely.
 
-  function toggleAssetInChip(folderId: string, assetId: string, allAssetIds: string[]) {
+  function toggleAssetInChip(folderId: string, assetId: string, allAssets: MentionFolder['assets']) {
     const el = editorRef.current
     if (!el) return
     const chip = el.querySelector<HTMLElement>(`[data-mention="1"][data-folder-id="${folderId}"]`)
@@ -667,10 +678,14 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
     const raw = (chip.dataset.assetIds || '').split(',').filter(Boolean)
     // Treat empty dataset.assetIds as "all" so the first toggle deselects
     // an item from the full set instead of jumping from 0/N to 1/N.
-    const current = new Set(raw.length === 0 ? allAssetIds : raw)
+    const current = new Set(raw.length === 0 ? allAssets.map((asset) => asset.id) : raw)
     if (current.has(assetId)) current.delete(assetId)
     else current.add(assetId)
     chip.dataset.assetIds = Array.from(current).join(',')
+    chip.dataset.workspaceAssetIds = allAssets
+      .filter((asset) => current.has(asset.id) && asset.workspaceAssetId)
+      .map((asset) => asset.workspaceAssetId!)
+      .join(',')
     emit()
     // Force the popover to re-read the chip's dataset so the count updates.
     setPopover((p) => (p ? { ...p } : p))
@@ -724,18 +739,25 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
               <div className="p-2">
                 <div className="grid grid-cols-4 gap-1.5 max-h-[260px] overflow-y-auto pr-0.5">
                   {folder.assets.map((asset) => {
-                    const isSel = selectedIds.has(asset.id)
+                    const needsImport = !asset.workspaceAssetId
+                    const isSel = !needsImport && selectedIds.has(asset.id)
                     return (
                       <button
                         type="button"
                         key={asset.id}
-                        onClick={() => toggleAssetInChip(folder.id, asset.id, allIds)}
+                        onClick={() => toggleAssetInChip(folder.id, asset.id, folder.assets)}
+                        disabled={needsImport}
                         className={`relative aspect-square rounded-md overflow-hidden border transition ${
-                          isSel ? 'border-accent ring-1 ring-accent/60' : 'border-white/10 hover:border-white/30 opacity-50 hover:opacity-100'
+                          needsImport ? 'border-amber-400/40 opacity-45 cursor-not-allowed' : isSel ? 'border-accent ring-1 ring-accent/60' : 'border-white/10 hover:border-white/30 opacity-50 hover:opacity-100'
                         }`}
-                        title={isSel ? 'Click to deselect' : 'Click to select'}
+                        title={needsImport ? 'Needs import into Assets before Seedance' : isSel ? 'Click to deselect' : 'Click to select'}
                       >
                         <AssetThumb url={asset.r2_url} type={asset.type} />
+                        {needsImport && (
+                          <div className="absolute inset-x-0 bottom-0 bg-amber-950/90 px-1 py-0.5 text-[8px] text-amber-200">
+                            Needs import
+                          </div>
+                        )}
                         {isSel && (
                           <div className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-accent flex items-center justify-center">
                             <Check size={9} weight="bold" className="text-white" />

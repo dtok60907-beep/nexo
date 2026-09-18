@@ -1,8 +1,18 @@
 import type { Sql } from '@/lib/db'
 
-export const PROMPT_LOCK_LEASE_SECONDS = 15
+export const NODE_LOCK_LEASE_SECONDS = 15
+export const PROMPT_LOCK_LEASE_SECONDS = NODE_LOCK_LEASE_SECONDS
 
-export async function ensurePromptEditorLocks(sql: Sql): Promise<void> {
+type CanvasNodeLockInput = {
+  projectId: string
+  nodeId: string
+  participantId: string
+  userId: string
+}
+
+export async function ensureCanvasNodeLocks(sql: Sql): Promise<void> {
+  // Keep the historical physical table during rolling deployment. Old Prompt
+  // instances and new generic-node instances therefore share one authority.
   await sql`
     CREATE TABLE IF NOT EXISTS canvas_prompt_editor_locks (
       project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -15,12 +25,7 @@ export async function ensurePromptEditorLocks(sql: Sql): Promise<void> {
   `
 }
 
-export async function claimPromptEditorLock(sql: Sql, input: {
-  projectId: string
-  nodeId: string
-  participantId: string
-  userId: string
-}) {
+export async function claimCanvasNodeLock(sql: Sql, input: CanvasNodeLockInput) {
   const rows = await sql`
     INSERT INTO canvas_prompt_editor_locks (project_id, node_id, participant_id, user_id, expires_at)
     VALUES (${input.projectId}::uuid, ${input.nodeId}, ${input.participantId}, ${input.userId}, now() + interval '15 seconds')
@@ -34,12 +39,7 @@ export async function claimPromptEditorLock(sql: Sql, input: {
   return rows[0] ?? null
 }
 
-export async function heartbeatPromptEditorLock(sql: Sql, input: {
-  projectId: string
-  nodeId: string
-  participantId: string
-  userId: string
-}) {
+export async function heartbeatCanvasNodeLock(sql: Sql, input: CanvasNodeLockInput) {
   const rows = await sql`
     UPDATE canvas_prompt_editor_locks
     SET expires_at = now() + interval '15 seconds'
@@ -53,12 +53,7 @@ export async function heartbeatPromptEditorLock(sql: Sql, input: {
   return rows[0] ?? null
 }
 
-export async function releasePromptEditorLock(sql: Sql, input: {
-  projectId: string
-  nodeId: string
-  participantId: string
-  userId: string
-}): Promise<void> {
+export async function releaseCanvasNodeLock(sql: Sql, input: CanvasNodeLockInput): Promise<void> {
   await sql`
     DELETE FROM canvas_prompt_editor_locks
     WHERE project_id = ${input.projectId}::uuid
@@ -67,3 +62,8 @@ export async function releasePromptEditorLock(sql: Sql, input: {
       AND user_id = ${input.userId}
   `
 }
+
+export const ensurePromptEditorLocks = ensureCanvasNodeLocks
+export const claimPromptEditorLock = claimCanvasNodeLock
+export const heartbeatPromptEditorLock = heartbeatCanvasNodeLock
+export const releasePromptEditorLock = releaseCanvasNodeLock

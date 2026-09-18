@@ -13,10 +13,12 @@ import { Lightbox } from '../lightbox'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { ResizableNodeFrame } from './resizable-node-frame'
 import { useImageTrust } from '@/hooks/use-image-trust'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 
 function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   const projectId = (params?.id as string) || ''
+  const nodeLock = useNodeOwnershipLock(projectId, id)
   const { createNextShot, patchNodeData, replaceShot } = useCanvasCollaboration()
   const [thumbnail, setThumbnail] = useState<string | null>(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
   const [folderModalOpen, setFolderModalOpen] = useState(false)
@@ -51,13 +53,15 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
     workspaceAssetId: data.workspaceAssetId,
     filename: `${String(data.label || 'reference-image')}.png`,
     enabled: Boolean(selected) && Boolean(thumbnail) && !isUploading && !isAudio && !isVideo,
-    onCanonicalized: useCallback((canonicalUrl: string, workspaceAssetId: string) => {
+    onCanonicalized: useCallback(async (canonicalUrl: string, workspaceAssetId: string) => {
+      if (!(await nodeLock.claim())) return
       setThumbnail(canonicalUrl)
       patchNodeData(id, { thumbnail: canonicalUrl, assetId: workspaceAssetId, workspaceAssetId })
-    }, [id, patchNodeData]),
+    }, [id, nodeLock, patchNodeData]),
   })
 
-  const handleShotSelect = (shotId: string) => {
+  const handleShotSelect = async (shotId: string) => {
+    if (!(await nodeLock.claim())) return
     // Empty string from the selector means "unassign". Storing undefined
     // keeps the data object clean and matches the image/video-gen path.
     // Also strips the legacy `selectedShotId` so the two fields can't
@@ -71,7 +75,8 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   // Take a shot over exclusively: assign it here and clear it from whatever
   // other node in the SAME scene currently holds it (under shotId or the legacy
   // selectedShotId field).
-  const handleShotReplace = (shotId: string) => {
+  const handleShotReplace = async (shotId: string) => {
+    if (!(await nodeLock.claim())) return
     replaceShot(id, shotId)
   }
 
@@ -79,11 +84,13 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   // shot number after the highest existing shot in the SAME scene.
   // Scenes are isolated by sceneId so two scenes can both have a
   // "Shot 1" without colliding.
-  const handleNewShot = () => {
+  const handleNewShot = async () => {
+    if (!(await nodeLock.claim())) return
     createNextShot(id)
   }
 
-  const handleAddToFolder = (type: 'character' | 'prop' | 'location') => {
+  const handleAddToFolder = async (type: 'character' | 'prop' | 'location') => {
+    if (!(await nodeLock.claim())) return
     setFolderType(type)
     setFolderModalOpen(true)
   }
@@ -95,6 +102,8 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
       defaultSize={{ width: 320, height: 260 }}
       bounds={{ minWidth: 180, minHeight: 96, maxWidth: 900, maxHeight: 900 }}
       className="group"
+      claimLock={nodeLock.claim}
+      releaseLock={nodeLock.release}
     >
       <NodeActionToolbar
         nodeId={id}

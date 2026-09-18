@@ -74,7 +74,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
 
         const folderIds = folders.map(f => String(f.id))
         const items = await sql`
-          SELECT i.folder_id, i.asset_id, i.added_at,
+          SELECT i.folder_id, i.asset_id, i.workspace_asset_id, i.added_at,
                  g.r2_url, g.type AS asset_type, g.prompt
           FROM asset_folder_items i
           LEFT JOIN generation_history g ON g.id = i.asset_id
@@ -88,6 +88,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
           if (!itemsByFolder.has(fid)) itemsByFolder.set(fid, [])
           itemsByFolder.get(fid)!.push({
             id: row.asset_id,
+            workspaceAssetId: row.workspace_asset_id ?? undefined,
             r2_url: row.r2_url,
             type: row.asset_type,
             prompt: row.prompt,
@@ -117,7 +118,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
 
         const sql = db()
         await ensureFoldersSchema(sql)
-        const { name, description, type, projectId, assetIds = [] } = await request.json()
+        const { name, description, type, projectId, assetIds = [], workspaceAssetIds = {} } = await request.json()
 
         if (!name || !type) {
           return NextResponse.json({ error: 'name and type are required' }, { status: 400 })
@@ -151,9 +152,10 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
         for (const assetId of normalizedAssetIds) {
           if (!assetId) continue
           await sql`
-            INSERT INTO asset_folder_items (folder_id, asset_id)
-            VALUES (${id}, ${assetId})
-            ON CONFLICT (folder_id, asset_id) DO NOTHING
+            INSERT INTO asset_folder_items (folder_id, asset_id, workspace_asset_id)
+            VALUES (${id}, ${assetId}, ${typeof workspaceAssetIds[assetId] === 'string' ? workspaceAssetIds[assetId] : null})
+            ON CONFLICT (folder_id, asset_id) DO UPDATE
+            SET workspace_asset_id = COALESCE(EXCLUDED.workspace_asset_id, asset_folder_items.workspace_asset_id)
           `
           await sql`
             UPDATE generation_history
