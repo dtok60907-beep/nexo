@@ -51,7 +51,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
         }
 
         const items = await sql`
-          SELECT i.asset_id, g.r2_url, g.type AS asset_type, g.prompt
+          SELECT i.asset_id, i.workspace_asset_id, g.r2_url, g.type AS asset_type, g.prompt
           FROM asset_folder_items i
           LEFT JOIN generation_history g ON g.id = i.asset_id
           WHERE i.folder_id = ${folderId}
@@ -62,6 +62,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           ...folders[0],
           assets: items.map(r => ({
             id: r.asset_id,
+            workspaceAssetId: r.workspace_asset_id ?? undefined,
             r2_url: r.r2_url,
             type: r.asset_type,
             prompt: r.prompt,

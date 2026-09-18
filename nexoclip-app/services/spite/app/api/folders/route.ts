@@ -74,7 +74,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
 
         const folderIds = folders.map(f => String(f.id))
         const items = await sql`
-          SELECT i.folder_id, i.asset_id, i.added_at,
+          SELECT i.folder_id, i.asset_id, i.workspace_asset_id, i.added_at,
                  g.r2_url, g.type AS asset_type, g.prompt
           FROM asset_folder_items i
           LEFT JOIN generation_history g ON g.id = i.asset_id
@@ -88,6 +88,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
           if (!itemsByFolder.has(fid)) itemsByFolder.set(fid, [])
           itemsByFolder.get(fid)!.push({
             id: row.asset_id,
+            workspaceAssetId: row.workspace_asset_id ?? undefined,
             r2_url: row.r2_url,
             type: row.asset_type,
             prompt: row.prompt,
