@@ -15,6 +15,9 @@ type AddedFolder = { id: string; name: string; type: FolderType }
 
 interface AssetItem {
   id: string
+  // The sole provider-facing identity. `id` remains the legacy Spite asset
+  // ID used by thumbnails and existing folders during migration.
+  workspaceAssetId?: string
   url: string
   isUploading?: boolean
 }
@@ -95,7 +98,17 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       const lookup = await fetch(withBasePath(`/api/assets/by-url?${query}`))
       if (!lookup.ok) throw new Error(`asset lookup returned ${lookup.status}`)
       const existing = await lookup.json()
-      if (existing?.id) return { id: existing.id, url: assetUrl }
+      if (existing?.id) {
+        const source = await fetch(assetUrl)
+        if (!source.ok) throw new Error(`asset download returned ${source.status}`)
+        const form = new FormData()
+        form.set('file', new File([await source.blob()], 'canvas-image', { type: source.headers.get('content-type') || 'image/png' }))
+        const imported = await fetch('/api/assets/import', { method: 'POST', body: form })
+        if (!imported.ok) throw new Error(`asset import returned ${imported.status}`)
+        const canonical = await imported.json()
+        if (!canonical?.asset?.id) throw new Error('asset import returned no workspace asset id')
+        return { id: existing.id, workspaceAssetId: canonical.asset.id, url: assetUrl }
+      }
 
       const registration = await fetch(withBasePath('/api/assets'), {
         method: 'POST',
@@ -110,7 +123,15 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       if (!registration.ok) throw new Error(`asset registration returned ${registration.status}`)
       const created = await registration.json()
       if (!created?.id) throw new Error('asset registration returned no id')
-      return { id: created.id as string, url: assetUrl }
+      const source = await fetch(assetUrl)
+      if (!source.ok) throw new Error(`asset download returned ${source.status}`)
+      const form = new FormData()
+      form.set('file', new File([await source.blob()], 'canvas-image', { type: source.headers.get('content-type') || 'image/png' }))
+      const imported = await fetch('/api/assets/import', { method: 'POST', body: form })
+      if (!imported.ok) throw new Error(`asset import returned ${imported.status}`)
+      const canonical = await imported.json()
+      if (!canonical?.asset?.id) throw new Error('asset import returned no workspace asset id')
+      return { id: created.id as string, workspaceAssetId: canonical.asset.id, url: assetUrl }
     })()
     assetResolutionRef.current = { key, promise }
     promise.catch(() => {
@@ -285,7 +306,10 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       const response = await fetch(withBasePath(`/api/folders/${folderId}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ addAssetIds: [resolvedAssetId] })
+        body: JSON.stringify({
+          addAssetIds: [resolvedAssetId],
+          workspaceAssetIds: Object.fromEntries(selectedAssets.filter(asset => asset.workspaceAssetId).map(asset => [asset.id, asset.workspaceAssetId])),
+        })
       })
       if (!response.ok) throw new Error(`folder update returned ${response.status}`)
       window.dispatchEvent(new CustomEvent('folders-changed'))
@@ -326,6 +350,9 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
         }
       }
       const assetIds = readyAssets.map(a => a.id)
+      const workspaceAssetIds = Object.fromEntries(readyAssets
+        .filter((asset): asset is AssetItem & { workspaceAssetId: string } => Boolean(asset.workspaceAssetId))
+        .map(asset => [asset.id, asset.workspaceAssetId]))
 
       console.log('[folders] save', { name: newName, type: folderType, projectId, assetIds, editing: !!editFolder })
 
@@ -334,7 +361,7 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
         res = await fetch(withBasePath(`/api/folders/${editFolder.id}`), {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newName.trim(), description: newDescription.trim() || null, setAssetIds: assetIds })
+          body: JSON.stringify({ name: newName.trim(), description: newDescription.trim() || null, setAssetIds: assetIds, workspaceAssetIds })
         })
       } else {
         res = await fetch(withBasePath('/api/folders'), {
@@ -345,6 +372,7 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
             description: newDescription.trim() || null,
             type: folderType,
             assetIds,
+            workspaceAssetIds,
             // Required — without this the folder lands in a default
             // proj-001 bucket and never shows up in the sidebar.
             projectId,

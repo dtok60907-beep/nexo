@@ -118,7 +118,7 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
 
         const sql = db()
         await ensureFoldersSchema(sql)
-        const { name, description, type, projectId, assetIds = [] } = await request.json()
+        const { name, description, type, projectId, assetIds = [], workspaceAssetIds = {} } = await request.json()
 
         if (!name || !type) {
           return NextResponse.json({ error: 'name and type are required' }, { status: 400 })
@@ -152,9 +152,10 @@ export function createFoldersRouteHandlers(deps: FoldersRouteDeps = {}) {
         for (const assetId of normalizedAssetIds) {
           if (!assetId) continue
           await sql`
-            INSERT INTO asset_folder_items (folder_id, asset_id)
-            VALUES (${id}, ${assetId})
-            ON CONFLICT (folder_id, asset_id) DO NOTHING
+            INSERT INTO asset_folder_items (folder_id, asset_id, workspace_asset_id)
+            VALUES (${id}, ${assetId}, ${typeof workspaceAssetIds[assetId] === 'string' ? workspaceAssetIds[assetId] : null})
+            ON CONFLICT (folder_id, asset_id) DO UPDATE
+            SET workspace_asset_id = COALESCE(EXCLUDED.workspace_asset_id, asset_folder_items.workspace_asset_id)
           `
           await sql`
             UPDATE generation_history
