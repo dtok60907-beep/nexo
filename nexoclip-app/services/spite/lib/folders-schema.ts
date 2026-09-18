@@ -11,11 +11,6 @@ let ensured = false
 export async function ensureFoldersSchema(sql: any): Promise<void> {
   if (ensured) return
 
-  // Keep legacy asset_id for preview compatibility. Seedance uses this stable
-  // workspace UUID instead of URLs or generation_history IDs.
-  await sql`ALTER TABLE asset_folder_items ADD COLUMN IF NOT EXISTS workspace_asset_id text`
-  await sql`CREATE INDEX IF NOT EXISTS idx_folder_items_workspace_asset ON asset_folder_items(workspace_asset_id) WHERE workspace_asset_id IS NOT NULL`
-
   const projectIdCol = await sql`
     SELECT data_type
     FROM information_schema.columns
@@ -38,6 +33,10 @@ export async function ensureFoldersSchema(sql: any): Promise<void> {
   const hasCompositePk = itemsPk.length > 0
 
   if (projectIdIsText && hasCompositePk) {
+    // Keep legacy asset_id for preview compatibility. Seedance uses this
+    // stable workspace UUID instead of URLs or generation_history IDs.
+    await sql`ALTER TABLE asset_folder_items ADD COLUMN IF NOT EXISTS workspace_asset_id text`
+    await sql`CREATE INDEX IF NOT EXISTS idx_folder_items_workspace_asset ON asset_folder_items(workspace_asset_id) WHERE workspace_asset_id IS NOT NULL`
     ensured = true
     return
   }
