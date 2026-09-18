@@ -5,6 +5,7 @@ import test from 'node:test'
 import { deleteEmptyAssetFolders } from './project-ownership'
 
 const source = readFileSync(new URL('./project-ownership.ts', import.meta.url), 'utf8')
+const folderRoute = readFileSync(new URL('../app/api/folders/[folderId]/route.ts', import.meta.url), 'utf8')
 
 test('legacy generation asset ownership casts UUID project ids to the text foreign key', () => {
   const query = source.slice(
@@ -15,6 +16,11 @@ test('legacy generation asset ownership casts UUID project ids to the text forei
   assert.match(query, /JOIN projects p ON p\.id::text = g\.project_id/)
   assert.match(query, /g\.id::text =/)
   assert.doesNotMatch(query, /JOIN projects p ON p\.id = g\.project_id/)
+})
+
+test('folder ownership and deletion compare UUID identities safely', () => {
+  assert.match(source, /f\.id::text = \$\{folderId\}/)
+  assert.match(folderRoute, /DELETE FROM asset_folders WHERE id::text = \$\{folderId\}/)
 })
 
 test('deletes only affected folders that have no assets left', async () => {

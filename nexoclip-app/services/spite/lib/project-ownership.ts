@@ -39,7 +39,7 @@ export async function userOwnsFolder(sql: Sql, userId: string, folderId: string)
     SELECT 1
     FROM asset_folders f
     JOIN projects p ON p.id = f.project_id
-    WHERE f.id = ${folderId} AND p.userid = ${userId}
+    WHERE f.id::text = ${folderId} AND p.userid = ${userId}
     LIMIT 1
   `
   return rows.length > 0
