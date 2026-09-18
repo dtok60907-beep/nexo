@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { BytePlusAssetsError } from '../../src/providers/byteplusAssetsClient.js';
 import { deleteTrustedWorkspaceAsset } from '../../src/services/unifiedAssetDeletionService.js';
 
-function fixture({ link = true, providerError, projectName = 'project-x', finalLinkDeleted = true, canvasComplete = true } = {}) {
+function fixture({ link = true, providerError, projectName = 'project-x', finalLinkDeleted = true, finalAssetDeleted = true, canvasComplete = true } = {}) {
   const calls = [];
   const asset = { id: 'asset-1', workspace_id: 'workspace-1', storage_key: 'workspace-1/a.png' };
   const mapping = link ? { provider_asset_id: 'provider-1', project_name: projectName, attempt_id: 'attempt-1' } : null;
@@ -14,7 +14,7 @@ function fixture({ link = true, providerError, projectName = 'project-x', finalL
       calls.push({ text, values });
       if (text.includes('FROM assets a')) return { rows: [{ ...asset, ...mapping }] };
       if (text.startsWith('DELETE FROM byteplus_asset_links')) return { rowCount: finalLinkDeleted ? 1 : 0, rows: [] };
-      if (text.startsWith('DELETE FROM assets')) return { rowCount: 1, rows: [] };
+      if (text.startsWith('DELETE FROM assets')) return { rowCount: finalAssetDeleted ? 1 : 0, rows: [] };
       return { rows: [], rowCount: 1 };
     }, release() { calls.push({ text: `RELEASE-${phase}` }); } };
   } };
@@ -62,6 +62,13 @@ test('project mismatch and incomplete Canvas cleanup preserve local metadata', a
   const canvas = fixture({ canvasComplete: false });
   await assert.rejects(run(canvas), error => error.code === 'CANVAS_REFERENCE_CLEANUP_INCOMPLETE');
   assert.equal(canvas.calls.some(c => c.text?.startsWith('DELETE FROM assets')), false);
+});
+
+test('asset deletion stops if a Trust mapping appears after an empty snapshot', async () => {
+  const f = fixture({ link: false, finalAssetDeleted: false });
+  await assert.rejects(run(f), error => error.code === 'ASSET_DELETE_CHANGED');
+  const assetDelete = f.calls.find(c => c.text?.startsWith('DELETE FROM assets'));
+  assert.match(assetDelete.text, /NOT EXISTS/);
 });
 
 test('compare-and-set refuses to delete a newer Trust mapping', async () => {

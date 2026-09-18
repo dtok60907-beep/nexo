@@ -95,7 +95,17 @@ export async function deleteTrustedWorkspaceAsset({
       }
     }
     await finalClient.query('DELETE FROM generation_outputs WHERE workspace_id = $1 AND asset_id = $2', [workspaceId, localAssetId]);
-    const deleted = await finalClient.query('DELETE FROM assets WHERE workspace_id = $1 AND id = $2', [workspaceId, localAssetId]);
+    const deleted = asset.provider_asset_id
+      ? await finalClient.query('DELETE FROM assets WHERE workspace_id = $1 AND id = $2', [workspaceId, localAssetId])
+      : await finalClient.query(
+        `DELETE FROM assets a
+         WHERE a.workspace_id = $1 AND a.id = $2
+           AND NOT EXISTS (
+             SELECT 1 FROM byteplus_asset_links bal
+             WHERE bal.workspace_id = a.workspace_id AND bal.local_asset_id = a.id
+           )`,
+        [workspaceId, localAssetId],
+      );
     if (deleted.rowCount !== 1) throw failure('Asset changed during deletion.', { code: 'ASSET_DELETE_CHANGED', status: 409, retryable: true });
     await finalClient.query('COMMIT');
   } catch (error) {
