@@ -167,7 +167,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             }
             const removedRows = await sql`
               DELETE FROM asset_folder_items
-              WHERE workspace_asset_id = ${assetId}
+              WHERE workspace_asset_id::text = ${assetId}
                 AND folder_id IN (
                   SELECT f.id FROM asset_folders f
                   JOIN projects p ON p.id = f.project_id
@@ -188,7 +188,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           if (upstream.ok) {
             const removedRows = await sql`
               DELETE FROM asset_folder_items
-              WHERE workspace_asset_id = ${assetId}
+              WHERE workspace_asset_id::text = ${assetId}
                 AND folder_id IN (
                   SELECT f.id FROM asset_folders f
                   JOIN projects p ON p.id = f.project_id

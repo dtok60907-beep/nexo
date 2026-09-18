@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { createAssetRouteHandlers } from '@/app/api/assets/[assetId]/route'
@@ -6,6 +7,7 @@ import { workspaceAssetDeleteUrl, workspaceAssetReferencePatches } from '@/lib/w
 
 const PROJECT_ID = 'project-1'
 const USER_ID = 'user-1'
+const assetRouteSource = readFileSync(new URL('../app/api/assets/[assetId]/route.ts', import.meta.url), 'utf8')
 
 function sqlForWorkspaceAsset() {
   return (async (strings: TemplateStringsArray) => {
@@ -41,6 +43,10 @@ test('internal cleanup removes canonical Canvas references before local deletion
   assert.equal(response.status, 200)
   assert.equal(proxied, false)
   assert.deepEqual(patched[0].unset.sort(), ['outputUrl', 'workspaceAssetId'])
+})
+
+test('workspace folder cleanup compares UUID identities safely', () => {
+  assert.match(assetRouteSource, /workspace_asset_id::text = \$\{assetId\}/)
 })
 
 test('reference patching removes only exact canonical identities and mention selections', () => {
