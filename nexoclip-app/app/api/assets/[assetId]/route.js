@@ -10,7 +10,8 @@ import { deleteTrustedWorkspaceAsset } from '../../../../src/services/unifiedAss
 function errorResponse(error) {
   const status = error.status || (error.message === 'Authentication required' ? 401 : error.message === 'Workspace access denied' ? 403 : 400);
   return Response.json({
-    error: error.code ? { code: error.code, message: error.message, retryable: Boolean(error.retryable) } : { message: error.message },
+    error: error.message,
+    ...(error.code ? { code: error.code, retryable: Boolean(error.retryable) } : {}),
   }, { status });
 }
 
