@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   BytePlusAssetsError,
   createBytePlusAssetsClient,
+  isBytePlusAssetNotFound,
   mapBytePlusAssetStatus,
 } from '../../src/providers/byteplusAssetsClient.js';
 
@@ -46,7 +47,7 @@ test('requires both Assets API credentials without exposing the configured crede
 
 test('exposes only the three focused Assets API operations', () => {
   const { client } = recordingClient();
-  assert.deepEqual(Object.keys(client).sort(), ['createAsset', 'createAssetGroup', 'getAsset']);
+  assert.deepEqual(Object.keys(client).sort(), ['createAsset', 'createAssetGroup', 'deleteAsset', 'getAsset']);
 });
 
 test('rejects empty required inputs locally with a safe non-retryable error', () => {
@@ -70,6 +71,7 @@ test('rejects empty required inputs locally with a safe non-retryable error', ()
     () => client.createAssetGroup({ name: 'Character', clientToken: ' ' }),
     () => client.createAsset({ groupId: 'group-1', url: 'https://objects.example/source.png', name: 'Character', clientToken: '' }),
     () => client.getAsset({ assetId: '' }),
+    () => client.deleteAsset({ assetId: '', projectName: 'project-x' }),
   ];
 
   for (const call of invalidCalls) {
@@ -140,6 +142,54 @@ test('signs GetAsset and sends only the asset and project identifiers', async ()
   assert.equal(calls[0].url, 'https://ark.ap-southeast-1.byteplusapi.com/?Action=GetAsset&Version=2024-01-01');
   assert.equal(calls[0].options.body, '{"Id":"asset-1","ProjectName":"project-x"}');
   assert.equal(calls[0].options.headers.Authorization, 'HMAC-SHA256 Credential=AKIDEXAMPLE/20260916/ap-southeast-1/ark/request, SignedHeaders=content-type;host;x-content-sha256;x-date, Signature=306556bb6bbd5c0637327f62167dbe6d5fd16cce65a380c85a7e256d9f330ebd');
+});
+
+test('signs DeleteAsset with the asset and project identifiers', async () => {
+  const { client, calls } = recordingClient({ Result: { Id: 'asset-1' } });
+
+  const result = await client.deleteAsset({ assetId: 'asset-1', projectName: 'trusted-project' });
+
+  assert.deepEqual(result, { Id: 'asset-1' });
+  assert.equal(calls[0].url, 'https://ark.ap-southeast-1.byteplusapi.com/?Action=DeleteAsset&Version=2024-01-01');
+  assert.equal(calls[0].options.body, '{"Id":"asset-1","ProjectName":"trusted-project"}');
+  assert.match(calls[0].options.headers.Authorization, /Signature=[a-f0-9]{64}$/);
+});
+
+test('classifies only typed BytePlus asset-not-found failures', async () => {
+  const client = createBytePlusAssetsClient({
+    env,
+    now: fixedNow,
+    fetchFn: async () => jsonResponse({
+      ResponseMetadata: { Error: { Code: 'AssetNotFound', Message: 'provider details must not escape' } },
+    }, 404),
+  });
+
+  await assert.rejects(client.deleteAsset({ assetId: 'asset-1', projectName: 'project-x' }), (error) => {
+    assert.equal(error.code, 'AssetNotFound');
+    assert.equal(error.status, 404);
+    assert.equal(error.retryable, false);
+    assert.ok(isBytePlusAssetNotFound(error));
+    assert.doesNotMatch(JSON.stringify(error), /provider details/);
+    return true;
+  });
+  assert.equal(isBytePlusAssetNotFound(new Error('AssetNotFound')), false);
+});
+
+test('preserves retryable status for DeleteAsset rate limits and server failures', async () => {
+  for (const status of [429, 500]) {
+    const client = createBytePlusAssetsClient({
+      env,
+      now: fixedNow,
+      fetchFn: async () => jsonResponse({ Result: {} }, status),
+    });
+
+    await assert.rejects(client.deleteAsset({ assetId: 'asset-1', projectName: 'project-x' }), (error) => {
+      assert.equal(error.status, status);
+      assert.equal(error.retryable, true);
+      assert.equal(error.code, 'BYTEPLUS_ASSETS_UNAVAILABLE');
+      return true;
+    });
+  }
 });
 
 test('uses the documented default project and configured region', async () => {

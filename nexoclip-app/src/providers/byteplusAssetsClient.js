@@ -4,6 +4,7 @@ const SERVICE = 'ark';
 const VERSION = '2024-01-01';
 const SIGNED_HEADERS = 'content-type;host;x-content-sha256;x-date';
 const TRANSIENT_STATUSES = new Set([408, 409, 429, 500, 502, 503, 504]);
+const BYTEPLUS_ASSET_NOT_FOUND_CODES = new Set(['AssetNotFound', 'ResourceNotFound', 'NotFound']);
 const PENDING_STATUSES = new Set(['Processing', 'Queued', 'Pending']);
 const TRANSIENT_ERROR_CODES = new Set([
   'InternalError',
@@ -79,9 +80,11 @@ function unavailableError(status = 503) {
   });
 }
 
-function requestError(status) {
+function requestError(status, providerCode) {
   return new BytePlusAssetsError('BytePlus Assets API request failed.', {
-    code: 'BYTEPLUS_ASSETS_REQUEST_FAILED',
+    code: BYTEPLUS_ASSET_NOT_FOUND_CODES.has(providerCode)
+      ? providerCode
+      : 'BYTEPLUS_ASSETS_REQUEST_FAILED',
     status,
   });
 }
@@ -102,6 +105,10 @@ function invalidInputError() {
 
 function requireNonEmptyString(value) {
   if (typeof value !== 'string' || !value.trim()) throw invalidInputError();
+}
+
+export function isBytePlusAssetNotFound(error) {
+  return error instanceof BytePlusAssetsError && BYTEPLUS_ASSET_NOT_FOUND_CODES.has(error.code);
 }
 
 export function mapBytePlusAssetStatus(payload) {
@@ -159,7 +166,13 @@ export function createBytePlusAssetsClient({ env = process.env, fetchFn = global
       if (TRANSIENT_STATUSES.has(response.status) || response.status >= 500) {
         throw unavailableError(response.status);
       }
-      throw requestError(response.status);
+      let providerCode;
+      try {
+        providerCode = (await response.json())?.ResponseMetadata?.Error?.Code;
+      } catch {
+        // Preserve the safe generic request error for malformed error bodies.
+      }
+      throw requestError(response.status, providerCode);
     }
     let responseBody;
     try {
@@ -170,7 +183,7 @@ export function createBytePlusAssetsClient({ env = process.env, fetchFn = global
     const providerError = responseBody?.ResponseMetadata?.Error;
     if (providerError) {
       if (TRANSIENT_ERROR_CODES.has(providerError.Code)) throw unavailableError();
-      throw requestError(400);
+      throw requestError(response.status >= 400 ? response.status : 400, providerError.Code);
     }
     if (!responseBody?.Result || typeof responseBody.Result !== 'object') throw invalidResponseError();
     return responseBody.Result;
@@ -206,6 +219,12 @@ export function createBytePlusAssetsClient({ env = process.env, fetchFn = global
     getAsset({ assetId } = {}) {
       requireNonEmptyString(assetId);
       return request('GetAsset', { Id: assetId, ProjectName: projectName });
+    },
+    deleteAsset({ assetId, projectName: requestedProjectName } = {}) {
+      requireNonEmptyString(assetId);
+      const targetProjectName = requestedProjectName ?? projectName;
+      requireNonEmptyString(targetProjectName);
+      return request('DeleteAsset', { Id: assetId, ProjectName: targetProjectName });
     },
   };
 }
