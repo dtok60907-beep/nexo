@@ -31,9 +31,7 @@ export function trustImportSourceUrl(url: string) {
     const parsed = new URL(url, 'https://canvas.invalid')
     if (!/^\/(?:spite\/)?api\/r2-image\//.test(parsed.pathname)) return url
     parsed.searchParams.set('trust_import', '1')
-    return /^[a-z][a-z\d+.-]*:\/\//i.test(url)
-      ? parsed.toString()
-      : `${parsed.pathname}${parsed.search}`
+    return `${parsed.pathname}${parsed.search}`
   } catch {
     return url
   }

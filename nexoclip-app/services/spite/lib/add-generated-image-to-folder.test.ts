@@ -23,6 +23,11 @@ test('image generation node exposes generated output to the folder modal', () =>
   assert.match(imageNode, /<AddToFolderModal[\s\S]*?assetUrl=\{outputUrl\}/)
 })
 
+test('legacy generated images use the same-origin import helper instead of direct cross-origin fetch', () => {
+  assert.match(folderModal, /importImageForTrust/)
+  assert.doesNotMatch(folderModal, /const source = await fetch\(assetUrl\)/)
+})
+
 test('canonical workspace images skip cross-origin byte downloads when added to a folder', () => {
   assert.match(folderModal, /workspaceAssetIdFromUrl/)
   assert.match(folderModal, /const canonicalAssetId = workspaceAssetIdFromUrl\(assetUrl\)/)

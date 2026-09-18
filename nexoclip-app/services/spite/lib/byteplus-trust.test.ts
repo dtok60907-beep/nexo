@@ -56,6 +56,10 @@ test('legacy R2 proxy imports request a private same-origin trust copy', () => {
     trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png?version=2'),
     '/spite/api/r2-image/uploads/reference.png?version=2&trust_import=1',
   )
+  assert.equal(
+    trustImportSourceUrl('https://ai-ugc-http.example/spite/api/r2-image/uploads/reference.png'),
+    '/spite/api/r2-image/uploads/reference.png?trust_import=1',
+  )
   assert.equal(trustImportSourceUrl('https://other.example/reference.png'), 'https://other.example/reference.png')
 })
 
