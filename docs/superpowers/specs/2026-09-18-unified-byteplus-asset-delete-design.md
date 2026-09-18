@@ -107,7 +107,13 @@ Before removing local metadata, find and remove references to the asset from per
 
 The cleanup must not delete unrelated nodes or assets. If a legacy URL cannot be deterministically mapped to the local asset, leave it unchanged and report the cleanup as incomplete rather than deleting unrelated data.
 
-### 5. API route
+### 5. Canvas sound control
+
+The Canvas sound on/off toggle control must be hidden from the user interface for this flow. Sound must default to enabled (`on`) for newly created or updated Canvas media nodes.
+
+The underlying sound state should remain explicit in persisted data so future UI changes can restore user control without migration ambiguity. Existing saved nodes with no sound value should be treated as enabled when rendered.
+
+### 6. API route
 
 Add or update the asset delete route to call the deletion service. The route must:
 
@@ -118,7 +124,7 @@ Add or update the asset delete route to call the deletion service. The route mus
 - expose safe, non-secret error codes for retryable provider/storage failures;
 - never expose AK/SK, signed request details, or raw provider response bodies.
 
-### 6. Stale provider mapping recovery
+### 7. Stale provider mapping recovery
 
 Generation must not blindly trust a local `active` mapping forever. When BytePlus returns “asset not found” for an `asset://` reference:
 
@@ -156,6 +162,9 @@ Add tests before implementation for:
 8. Legacy references are removed only when their local asset identity is unambiguous.
 9. A stale provider asset encountered during generation becomes failed/not-trusted and is not submitted again.
 10. The delete route enforces workspace ownership and returns safe errors.
+11. The sound toggle control is not rendered in Canvas.
+12. New media nodes default to sound enabled.
+13. Existing nodes without an explicit sound value render with sound enabled.
 
 Use mocked provider/storage boundaries only where the external system is unavoidable; assert real service behavior and database query conditions.
 
@@ -173,6 +182,7 @@ Use mocked provider/storage boundaries only where the external system is unavoid
 - Automatically deleting assets from BytePlus based only on filename.
 - Silently deleting Canvas nodes whose asset ownership cannot be proven.
 - Changing video generation timeout behavior; that is a separate change.
+- Adding a new sound preference or alternate audio control; sound remains enabled by default while the toggle is hidden.
 
 ## Acceptance Criteria
 
