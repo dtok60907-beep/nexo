@@ -49,12 +49,27 @@ export async function findOwnedGenerationAsset(sql: Sql, userId: string, assetId
   const rows = await sql`
     SELECT g.id, g.project_id, g.r2_url
     FROM generation_history g
-    JOIN projects p ON p.id = g.project_id
+    JOIN projects p ON p.id::text = g.project_id
     WHERE p.userid = ${userId} AND g.id = ${assetId}
     LIMIT 1
   ` as Array<{ id: string; project_id: string; r2_url: string | null }>
 
   return rows[0] ?? null
+}
+
+export async function deleteEmptyAssetFolders(sql: Sql, folderIds: string[]): Promise<number> {
+  if (folderIds.length === 0) return 0
+
+  const rows = await sql`
+    DELETE FROM asset_folders f
+    WHERE f.id = ANY(${folderIds}::text[])
+      AND NOT EXISTS (
+        SELECT 1 FROM asset_folder_items i WHERE i.folder_id = f.id
+      )
+    RETURNING f.id
+  ` as Array<{ id: string }>
+
+  return rows.length
 }
 
 export async function countOwnedGenerationAssetsForProject(

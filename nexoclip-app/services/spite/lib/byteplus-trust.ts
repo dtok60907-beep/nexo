@@ -5,7 +5,9 @@ export interface BytePlusTrustState {
   error?: { code?: string; message?: string }
 }
 
-const WORKSPACE_ASSET_PATH = /^\/api\/assets\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/download(?:\?|$)/i
+const WORKSPACE_ASSET_ID_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+const WORKSPACE_ASSET_ID = new RegExp(`^${WORKSPACE_ASSET_ID_SOURCE}$`, 'i')
+const WORKSPACE_ASSET_PATH = new RegExp(`^/api/assets/(${WORKSPACE_ASSET_ID_SOURCE})/download(?:\\?|$)`, 'i')
 
 export function workspaceAssetIdFromUrl(value: string | null | undefined) {
   if (!value || /^\s*asset:\/\//i.test(value)) return null
@@ -13,6 +15,27 @@ export function workspaceAssetIdFromUrl(value: string | null | undefined) {
     return new URL(value, 'https://canvas.invalid').pathname.match(WORKSPACE_ASSET_PATH)?.[1] ?? null
   } catch {
     return null
+  }
+}
+
+export function resolveWorkspaceAssetId(
+  url: string | null | undefined,
+  persistedAssetId: unknown,
+) {
+  return workspaceAssetIdFromUrl(url)
+    ?? (typeof persistedAssetId === 'string' && WORKSPACE_ASSET_ID.test(persistedAssetId) ? persistedAssetId : null)
+}
+
+export function trustImportSourceUrl(url: string) {
+  try {
+    const parsed = new URL(url, 'https://canvas.invalid')
+    if (!/^\/(?:spite\/)?api\/r2-image\//.test(parsed.pathname)) return url
+    parsed.searchParams.set('trust_import', '1')
+    return /^[a-z][a-z\d+.-]*:\/\//i.test(url)
+      ? parsed.toString()
+      : `${parsed.pathname}${parsed.search}`
+  } catch {
+    return url
   }
 }
 
@@ -28,7 +51,7 @@ export async function importImageForTrust({
   const existingId = workspaceAssetIdFromUrl(url)
   if (existingId) return { assetId: existingId, canonicalUrl: url }
 
-  const source = await fetchFn(url)
+  const source = await fetchFn(trustImportSourceUrl(url))
   const contentType = source.headers.get('content-type')?.split(';')[0]?.trim() || ''
   if (!source.ok || !contentType.startsWith('image/')) throw new Error('Source image is unavailable')
   const form = new FormData()
@@ -88,6 +111,15 @@ export function shouldPollBytePlusTrust({
   status?: BytePlusTrustStatus
 }) {
   return documentVisible && detailVisible && type === 'image' && status === 'processing'
+}
+
+export function mergeAssetPreservingBytePlusTrust<T extends { id: string; byteplus_trust?: BytePlusTrustState }>(
+  current: T,
+  refreshed: T,
+): T {
+  return refreshed.byteplus_trust || !current.byteplus_trust
+    ? refreshed
+    : { ...refreshed, byteplus_trust: current.byteplus_trust }
 }
 
 export function applyBytePlusTrustState<T extends { id: string; byteplus_trust?: BytePlusTrustState }>(

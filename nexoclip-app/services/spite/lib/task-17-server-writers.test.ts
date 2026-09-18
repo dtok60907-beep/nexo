@@ -92,7 +92,7 @@ test('submits an owned image node as a durable NexoClip generation and patches i
   assert.equal(typeof (patches[0] as any).set.submittedAt, 'number')
 })
 
-test('submits owned video nodes with legacy Canvas folder references', async () => {
+test('rejects non-portrait Seedance video settings before queueing', async () => {
   const submissions: unknown[] = []
   let checkedLegacyReferences: string[] = []
   const handler = createGenerateSubmitHandler({
@@ -125,10 +125,9 @@ test('submits owned video nodes with legacy Canvas folder references', async () 
     },
   }))
 
-  assert.equal(response.status, 202)
-  assert.deepEqual((submissions[0] as any).input.parameters.referenceImages, [
-    '/spite/api/r2-image/uploads/nathan.png',
-  ])
+  assert.equal(response.status, 400)
+  assert.match((await response.json()).error, /portrait-only/i)
+  assert.deepEqual(submissions, [])
   assert.deepEqual(checkedLegacyReferences, ['/api/r2-image/uploads/nathan.png'])
 })
 

@@ -6,6 +6,7 @@ import {
   applyBytePlusTrustState,
   bytePlusTrustPollDelay,
   importImageForTrust,
+  mergeAssetPreservingBytePlusTrust,
   type BytePlusTrustState,
   requestBytePlusTrust,
   safeBytePlusTrustError,
@@ -306,7 +307,7 @@ export function LeftToolbar({
         return d
       })
     },
-    { refreshInterval: 5000, revalidateOnFocus: true }
+    { revalidateOnFocus: true }
   )
 
   // Listen for folder changes — force network revalidate so we don't show
@@ -334,10 +335,11 @@ export function LeftToolbar({
 
   // Keep selectedGenAsset in sync with latest data from SWR
   useEffect(() => {
-    if (selectedGenAsset) {
-      const updated = generatedAssets.find(a => a.id === selectedGenAsset.id)
-      if (updated) setSelectedGenAsset(updated)
-    }
+    setSelectedGenAsset(current => {
+      if (!current) return current
+      const updated = generatedAssets.find(asset => asset.id === current.id)
+      return updated ? mergeAssetPreservingBytePlusTrust(current, updated) : current
+    })
   }, [generatedAssets])
 
   const setTrustState = (assetId: string, state: BytePlusTrustState, revalidate = false) => {
@@ -1715,7 +1717,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (
@@ -1756,7 +1758,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (
@@ -1797,7 +1799,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (

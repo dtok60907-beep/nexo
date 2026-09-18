@@ -75,6 +75,12 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
       }
 
       const parameters = mapLegacyParameters(body, kind)
+      if (isBytePlusSeedance(model) && !hasOnlyCanonicalAssetReferences(parameters)) {
+        return NextResponse.json({
+          error: 'Every Seedance reference must be imported into Assets and active in Trust for Seedance.',
+          code: 'BYTEPLUS_REFERENCE_NOT_TRUSTED',
+        }, { status: 422 })
+      }
       const supportedRatios = configuredModel?.aspectRatios ?? ['1:1', '16:9', '9:16', '4:3', '3:4']
       if (parameters.aspectRatio === 'auto') delete parameters.aspectRatio
       else if (parameters.aspectRatio !== undefined && !supportedRatios.includes(String(parameters.aspectRatio))) {
@@ -134,13 +140,29 @@ function mapLegacyParameters(body: Record<string, unknown>, kind: 'image' | 'vid
   if (tenantReferences.some((url) => !/^\/api\/assets\/[^/]+\/download(?:\?|$)/.test(url) && !isLegacyCanvasReference(url))) {
     throw Object.assign(new Error('Video references must be tenant assets or owned Canvas references'), { status: 400 })
   }
-  const parameters: Record<string, unknown> = {}
-  for (const key of ['aspectRatio', 'resolution', 'seed']) if (settings[key] !== undefined && settings[key] !== '') parameters[key] = settings[key]
+  if (settings.aspectRatio !== undefined && settings.aspectRatio !== '' && settings.aspectRatio !== '9:16') {
+    throw Object.assign(new Error('Video generation is portrait-only (9:16).'), { status: 400 })
+  }
+  const parameters: Record<string, unknown> = { aspectRatio: '9:16' }
+  for (const key of ['resolution', 'seed']) if (settings[key] !== undefined && settings[key] !== '') parameters[key] = settings[key]
   if (settings.duration !== undefined) parameters.duration = Number.parseInt(String(settings.duration), 10)
   if (referenceImages.length) parameters.referenceImages = referenceImages
   if (videoUrl) parameters.referenceVideos = [videoUrl]
   if (frameImages.length) parameters.frameImages = frameImages
   return parameters
+}
+
+function isBytePlusSeedance(model: string): boolean {
+  return /(?:^|\/)(?:dreamina-)?seedance(?:[-.]|$)/i.test(model) || /^ep-20260916130618-t2z5j$/i.test(model)
+}
+
+function hasOnlyCanonicalAssetReferences(parameters: Record<string, unknown>): boolean {
+  const urls = [
+    ...(Array.isArray(parameters.referenceImages) ? parameters.referenceImages : []),
+    ...(Array.isArray(parameters.referenceVideos) ? parameters.referenceVideos : []),
+    ...(Array.isArray(parameters.frameImages) ? parameters.frameImages.map((frame) => frame && typeof frame === 'object' ? (frame as { url?: unknown }).url : undefined) : []),
+  ]
+  return urls.every((url) => typeof url === 'string' && /^\/api\/assets\/[^/]+\/download(?:\?|$)/.test(url))
 }
 
 function isLegacyCanvasReference(url: string): boolean {

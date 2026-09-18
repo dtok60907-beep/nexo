@@ -39,7 +39,7 @@ export function createBytePlusAdapter({ apiKey, baseUrl, fetch: fetchImpl = glob
       for (const video of referenceVideos || []) content.push({ type: 'video_url', role: 'reference_video', video_url: { url: video } });
       // Video generation is async-task based and lives under /tasks — /contents/generations
       // (used for images) silently accepts the request and returns an empty 200 for video models.
-      const response = await request('/contents/generations/tasks', { method: 'POST', body: JSON.stringify({ model, content, ...(duration !== undefined ? { duration } : {}), ...(resolution ? { resolution } : {}), ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(generateAudio !== undefined ? { generate_audio: generateAudio } : {}) }) });
+      const response = await request('/contents/generations/tasks', { method: 'POST', body: JSON.stringify({ model, content, ...(duration !== undefined ? { duration } : {}), ...(resolution ? { resolution } : {}), ...(aspectRatio ? { ratio: aspectRatio } : {}), ...(generateAudio !== undefined ? { generate_audio: generateAudio } : {}) }) });
       const payload = await response.json();
       return { ...payload, provider: 'byteplus', polling_url: payload.polling_url || null };
     },

@@ -502,6 +502,98 @@ test('binding replaceShot and createNextShot read the latest document state and 
   binding.destroy()
 })
 
+test('concurrent node-data patches merge by field instead of overwriting the prompt', () => {
+  const primary = createCanvasDocument()
+  const first = createReactFlowBinding(primary)
+  first.createNode({
+    id: 'shared-prompt', type: 'prompt', position: { x: 0, y: 0 },
+    data: { sceneId: 'scene-1', text: 'original', mentions: [] },
+  })
+
+  const replica = new Y.Doc()
+  Y.applyUpdate(replica, Y.encodeStateAsUpdate(primary))
+  const second = createReactFlowBinding(replica)
+  const promptUpdate = captureUpdate(primary, () => {
+    first.patchNodeData('shared-prompt', {
+      text: 'A changed the prompt',
+      mentions: [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['asset-1'] }],
+    })
+  })
+  const generationUpdate = captureUpdate(replica, () => {
+    second.patchNodeData('shared-prompt', { generationStatus: 'succeeded' })
+  })
+
+  Y.applyUpdate(primary, generationUpdate, 'remote-sync')
+  Y.applyUpdate(replica, promptUpdate, 'remote-sync')
+
+  const expected = {
+    sceneId: 'scene-1',
+    text: 'A changed the prompt',
+    mentions: [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['asset-1'] }],
+    generationStatus: 'succeeded',
+  }
+  assert.deepEqual(findNode(readCanvasProjection(primary), 'shared-prompt').data, expected)
+  assert.deepEqual(findNode(readCanvasProjection(replica), 'shared-prompt').data, expected)
+
+  second.destroy()
+  first.destroy()
+})
+
+test('concurrent prompt typing preserves both edits', () => {
+  const primary = createCanvasDocument()
+  const first = createReactFlowBinding(primary)
+  first.createNode({
+    id: 'shared-prompt', type: 'prompt', position: { x: 0, y: 0 },
+    data: { sceneId: 'scene-1', text: 'Nathan', mentions: [] },
+  })
+  const replica = new Y.Doc()
+  Y.applyUpdate(replica, Y.encodeStateAsUpdate(primary))
+  const second = createReactFlowBinding(replica)
+  const firstUpdate = captureUpdate(primary, () => first.patchNodeData('shared-prompt', { text: 'Nathan walks' }))
+  const secondUpdate = captureUpdate(replica, () => second.patchNodeData('shared-prompt', { text: 'Nathan waits' }))
+
+  Y.applyUpdate(primary, secondUpdate, 'remote-sync')
+  Y.applyUpdate(replica, firstUpdate, 'remote-sync')
+
+  const firstText = String(findNode(readCanvasProjection(primary), 'shared-prompt').data.text)
+  const secondText = String(findNode(readCanvasProjection(replica), 'shared-prompt').data.text)
+  assert.equal(firstText, secondText)
+  assert.match(firstText, /walks/)
+  assert.match(firstText, /waits/)
+
+  second.destroy()
+  first.destroy()
+})
+
+test('concurrent mention additions preserve both selections', () => {
+  const primary = createCanvasDocument()
+  const first = createReactFlowBinding(primary)
+  first.createNode({
+    id: 'shared-prompt', type: 'prompt', position: { x: 0, y: 0 },
+    data: { sceneId: 'scene-1', text: '@Nathan @Natasya', mentions: [] },
+  })
+  const replica = new Y.Doc()
+  Y.applyUpdate(replica, Y.encodeStateAsUpdate(primary))
+  const second = createReactFlowBinding(replica)
+  const firstUpdate = captureUpdate(primary, () => first.patchNodeData('shared-prompt', {
+    mentions: [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['n-1'] }],
+  }))
+  const secondUpdate = captureUpdate(replica, () => second.patchNodeData('shared-prompt', {
+    mentions: [{ folderId: 'natasya', name: 'Natasya', selectedAssetIds: ['na-1'] }],
+  }))
+
+  Y.applyUpdate(primary, secondUpdate, 'remote-sync')
+  Y.applyUpdate(replica, firstUpdate, 'remote-sync')
+
+  for (const doc of [primary, replica]) {
+    const mentions = findNode(readCanvasProjection(doc), 'shared-prompt').data.mentions as Array<{ folderId: string }>
+    assert.deepEqual(new Set(mentions.map((mention) => mention.folderId)), new Set(['nathan', 'natasya']))
+  }
+
+  second.destroy()
+  first.destroy()
+})
+
 test('undo manager tracks only local binding origin', () => {
   const doc = createCanvasDocument()
   const binding = createReactFlowBinding(doc)

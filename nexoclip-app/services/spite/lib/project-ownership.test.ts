@@ -112,7 +112,10 @@ function createFakeSqlFixture() {
       normalized.startsWith('create table asset_folders') ||
       normalized.startsWith('create index idx_asset_folders_project on asset_folders') ||
       normalized.startsWith('create table asset_folder_items') ||
-      normalized.startsWith('create index idx_asset_folder_items_asset on asset_folder_items')
+      normalized.startsWith('create index idx_asset_folder_items_asset on asset_folder_items') ||
+      normalized.startsWith('alter table asset_folder_items add column if not exists workspace_asset_id') ||
+      normalized.startsWith('create index if not exists idx_folder_items_workspace_asset') ||
+      normalized.startsWith('create index idx_folder_items_workspace_asset')
     ) {
       return []
     }

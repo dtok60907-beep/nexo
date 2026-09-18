@@ -11,10 +11,6 @@ let ensured = false
 export async function ensureFoldersSchema(sql: any): Promise<void> {
   if (ensured) return
 
-  // Look at the column types as they exist right now. We key the decision
-  // on asset_folders.project_id: if it's uuid (or the table doesn't have
-  // the columns we expect), reset. If it's text and the items table has
-  // a composite PK, leave it.
   const projectIdCol = await sql`
     SELECT data_type
     FROM information_schema.columns
@@ -37,7 +33,10 @@ export async function ensureFoldersSchema(sql: any): Promise<void> {
   const hasCompositePk = itemsPk.length > 0
 
   if (projectIdIsText && hasCompositePk) {
-    // Already on the clean schema, nothing to do.
+    // Keep legacy asset_id for preview compatibility. Seedance uses this
+    // stable workspace UUID instead of URLs or generation_history IDs.
+    await sql`ALTER TABLE asset_folder_items ADD COLUMN IF NOT EXISTS workspace_asset_id text`
+    await sql`CREATE INDEX IF NOT EXISTS idx_folder_items_workspace_asset ON asset_folder_items(workspace_asset_id) WHERE workspace_asset_id IS NOT NULL`
     ensured = true
     return
   }
@@ -47,34 +46,33 @@ export async function ensureFoldersSchema(sql: any): Promise<void> {
     hasCompositePk,
   })
 
-  // Drop the old tables (CASCADE handles any FK from items → folders) and
-  // recreate with the clean schema. Folder data is discarded — every prior
-  // save attempt was broken so there's nothing usable to preserve here.
   await sql`DROP TABLE IF EXISTS asset_folder_items CASCADE`
   await sql`DROP TABLE IF EXISTS asset_folders CASCADE`
 
   await sql`
     CREATE TABLE asset_folders (
-      id          text PRIMARY KEY,
-      project_id  text NOT NULL,
-      type        text NOT NULL,
-      name        text NOT NULL,
+      id text PRIMARY KEY,
+      project_id text NOT NULL,
+      type text NOT NULL,
+      name text NOT NULL,
       description text,
-      created_at  timestamptz NOT NULL DEFAULT now(),
-      updated_at  timestamptz NOT NULL DEFAULT now()
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
     )
   `
   await sql`CREATE INDEX idx_asset_folders_project ON asset_folders (project_id)`
 
   await sql`
     CREATE TABLE asset_folder_items (
-      folder_id  text NOT NULL REFERENCES asset_folders(id) ON DELETE CASCADE,
-      asset_id   text NOT NULL,
-      added_at   timestamptz NOT NULL DEFAULT now(),
+      folder_id text NOT NULL REFERENCES asset_folders(id) ON DELETE CASCADE,
+      asset_id text NOT NULL,
+      workspace_asset_id text,
+      added_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (folder_id, asset_id)
     )
   `
-  await sql`CREATE INDEX idx_asset_folder_items_asset ON asset_folder_items (asset_id)`
+  await sql`CREATE INDEX idx_asset_folder_items_asset ON asset_folder_items(asset_id)`
+  await sql`CREATE INDEX idx_folder_items_workspace_asset ON asset_folder_items(workspace_asset_id) WHERE workspace_asset_id IS NOT NULL`
 
   ensured = true
   console.log('[folders/schema] migration done')

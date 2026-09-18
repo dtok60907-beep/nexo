@@ -49,10 +49,48 @@ export function createReferenceStorage(env = process.env, fallback = createStora
   return fallback;
 }
 
+export async function findExactTrustedWorkspaceAsset({
+  workspaceId, body, contentType, excludeAssetId = null, projectName = process.env.BYTEPLUS_PROJECT_NAME?.trim() || 'default',
+}, storage = createStorage(), pool = getPool()) {
+  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body || []);
+  const result = await pool.query(
+    `SELECT a.id, a.workspace_id, a.storage_key, a.filename, a.content_type, a.size_bytes,
+            l.provider_asset_id, l.group_id, l.project_name
+     FROM assets a
+     JOIN byteplus_asset_links l
+       ON l.workspace_id = a.workspace_id AND l.local_asset_id = a.id
+     WHERE a.workspace_id = $1 AND a.size_bytes = $2 AND a.content_type = $3
+       AND l.status = 'active' AND l.provider_asset_id IS NOT NULL
+       AND l.project_name = $4
+       AND ($5::uuid IS NULL OR a.id <> $5)
+     ORDER BY l.updated_at DESC`,
+    [workspaceId, bytes.length, contentType, projectName, excludeAssetId],
+  );
+  for (const candidate of result.rows) {
+    try {
+      const download = await storage.createDownloadUrl({ key: candidate.storage_key });
+      const object = await storage.get(download.url || download);
+      if (bytes.equals(Buffer.from(object.body))) return candidate;
+    } catch {
+      // A stale candidate must not prevent importing or resolving this image.
+    }
+  }
+  return null;
+}
+
 export async function importWorkspaceAsset(workspaceId, { filename, contentType, body }, storage = createStorage(), pool = getPool()) {
   const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body || []);
   const metadata = validateAssetInput({ filename, contentType, sizeBytes: bytes.length });
   if (!metadata.contentType.startsWith('image/')) throw new Error('Only images can be imported');
+  const existing = await findExactTrustedWorkspaceAsset({
+    workspaceId, body: bytes, contentType: metadata.contentType,
+  }, storage, pool);
+  if (existing) {
+    return {
+      asset: existing,
+      url: `/api/assets/${encodeURIComponent(existing.id)}/download?workspace_id=${encodeURIComponent(workspaceId)}`,
+    };
+  }
   const assetId = randomUUID();
   const key = `${workspaceId}/${assetId}`;
   try {

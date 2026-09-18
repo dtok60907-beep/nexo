@@ -12,6 +12,7 @@ const nodeToolbarSource = readFileSync(new URL('../components/canvas/nodes/node-
 
 import {
   applyBytePlusTrustState,
+  mergeAssetPreservingBytePlusTrust,
   bytePlusTrustUrl,
   bytePlusTrustPollDelay,
   requestBytePlusTrust,
@@ -19,7 +20,9 @@ import {
   safeBytePlusTrustError,
   shouldPollBytePlusTrust,
   trustForSeedanceView,
+  trustImportSourceUrl,
   workspaceAssetIdFromUrl,
+  resolveWorkspaceAssetId,
 } from '@/lib/byteplus-trust'
 
 test('trust URL targets the unprefixed main app and encodes the asset ID', () => {
@@ -34,6 +37,26 @@ test('extracts only canonical workspace asset ids from image URLs', () => {
   assert.equal(workspaceAssetIdFromUrl('https://app.test/api/assets/2b3a6608-ff3f-45ef-a323-ec9e9e08d399/download?workspace_id=w1'), '2b3a6608-ff3f-45ef-a323-ec9e9e08d399')
   assert.equal(workspaceAssetIdFromUrl('/spite/api/r2-image/uploads/reference.png'), null)
   assert.equal(workspaceAssetIdFromUrl('asset://provider-id'), null)
+})
+
+test('recovers trusted identity from persisted node data when display URL is signed R2', () => {
+  const assetId = '2b3a6608-ff3f-45ef-a323-ec9e9e08d399'
+  const signedR2 = 'https://bucket.r2.cloudflarestorage.com/uploads/reference.png?X-Amz-Signature=secret'
+
+  assert.equal(resolveWorkspaceAssetId(signedR2, assetId), assetId)
+  assert.equal(resolveWorkspaceAssetId(signedR2, 'not-a-uuid'), null)
+})
+
+test('legacy R2 proxy imports request a private same-origin trust copy', () => {
+  assert.equal(
+    trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png'),
+    '/spite/api/r2-image/uploads/reference.png?trust_import=1',
+  )
+  assert.equal(
+    trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png?version=2'),
+    '/spite/api/r2-image/uploads/reference.png?version=2&trust_import=1',
+  )
+  assert.equal(trustImportSourceUrl('https://other.example/reference.png'), 'https://other.example/reference.png')
 })
 
 test('imports browser-readable legacy images before trust', async () => {
@@ -51,6 +74,7 @@ test('imports browser-readable legacy images before trust', async () => {
   })
   assert.equal(result.assetId, '2b3a6608-ff3f-45ef-a323-ec9e9e08d399')
   assert.equal(calls.length, 2)
+  assert.equal(calls[0].input, '/spite/api/r2-image/uploads/reference.png?trust_import=1')
   assert.equal(calls[1].input, '/api/assets/import')
   assert.equal(calls[1].method, 'POST')
 })
@@ -141,6 +165,9 @@ test('retryable GET failures remain processing and use bounded backoff', async (
 test('image generator and image reference nodes expose trust only while selected', () => {
   assert.match(imageNodeSource, /useImageTrust/)
   assert.match(referenceNodeSource, /useImageTrust/)
+  assert.match(imageNodeSource, /workspaceAssetId: data\.workspaceAssetId/)
+  assert.match(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId/)
+  assert.doesNotMatch(referenceNodeSource, /workspaceAssetId: data\.workspaceAssetId \|\| data\.assetId/)
   assert.match(imageNodeSource, /enabled: Boolean\(selected\).*Boolean\(outputUrl\)/)
   assert.match(referenceNodeSource, /enabled: Boolean\(selected\).*Boolean\(thumbnail\)/)
   assert.match(nodeToolbarSource, /trustAction/)
@@ -178,6 +205,13 @@ test('processing trust polling uses one recursive timeout with cleanup, not an o
   assert.match(toolbarSource, /document\.addEventListener\('visibilitychange'/)
   assert.match(toolbarSource, /document\.hidden/)
   assert.match(pollingEffect, /bytePlusTrustPollDelay/)
+})
+
+test('asset revalidation does not erase a locally confirmed trust state', () => {
+  const current = { id: 'image-1', r2_url: '/canonical', byteplus_trust: { status: 'active' as const } }
+  const refreshed = { id: 'image-1', r2_url: '/canonical' }
+
+  assert.deepEqual(mergeAssetPreservingBytePlusTrust(current, refreshed), current)
 })
 
 test('trust responses update the matching list item without requiring an ID in the payload', () => {

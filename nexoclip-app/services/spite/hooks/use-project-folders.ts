@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import useSWR from 'swr'
 import type { MentionFolder } from '@/components/canvas/mention-textarea'
 import { withBasePath } from '@/lib/base-path'
+import { foldersWithUsableAssets } from '@/lib/folder-visibility'
 
 const fetcher = async (url: string) => {
   const response = await fetch(withBasePath(url))
@@ -20,13 +21,12 @@ export function useProjectFolders(projectId: string | undefined) {
   const { data, mutate } = useSWR<MentionFolder[]>(
     projectId ? `/api/folders?projectId=${projectId}` : null,
     fetcher,
-    { refreshInterval: 8000, revalidateOnFocus: true, fallbackData: [] },
+    { revalidateOnFocus: true, fallbackData: [] },
   )
 
   // The folder-modal dispatches `folders-changed` after a create/edit/add.
   // The left toolbar already listens to refresh its sidebar; subscribe here
-  // too so @-mention suggestion dropdowns inside nodes update without
-  // waiting for the 8 s polling interval.
+  // too so @-mention suggestion dropdowns inside nodes update immediately.
   useEffect(() => {
     if (!projectId) return
     const handler = () => mutate()
@@ -34,5 +34,5 @@ export function useProjectFolders(projectId: string | undefined) {
     return () => window.removeEventListener('folders-changed', handler)
   }, [projectId, mutate])
 
-  return { folders: data || [], refresh: mutate }
+  return { folders: foldersWithUsableAssets(data || []), refresh: mutate }
 }

@@ -242,16 +242,13 @@ function patchNodeData(
       return
     }
 
-    const nextData = {
-      ...coerceRecord(node.get('data')),
-      ...set,
+    const data = ensureDataMap(node)
+    for (const [key, value] of Object.entries(set)) {
+      setDataValue(data, key, value)
     }
-
     for (const key of unset) {
-      delete nextData[key]
+      data.delete(key)
     }
-
-    node.set('data', nextData)
   }, origin)
 }
 
@@ -269,8 +266,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function coerceRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? { ...value } : {}
+function setDataValue(data: Y.Map<unknown>, key: string, value: unknown): void {
+  if (key !== 'text' || typeof value !== 'string') {
+    data.set(key, value)
+    return
+  }
+  const current = data.get(key)
+  const text = current instanceof Y.Text ? current : new Y.Text(typeof current === 'string' ? current : '')
+  if (!(current instanceof Y.Text)) data.set(key, text)
+  const existing = text.toString()
+  if (existing !== value) {
+    text.delete(0, existing.length)
+    if (value) text.insert(0, value)
+  }
+}
+
+function ensureDataMap(node: Y.Map<unknown>): Y.Map<unknown> {
+  const current = node.get('data')
+  if (current instanceof Y.Map) return current
+
+  const data = new Y.Map<unknown>()
+  if (isRecord(current)) {
+    for (const [key, value] of Object.entries(current)) data.set(key, value)
+  }
+  node.set('data', data)
+  return data
 }
 
 function resolveDocumentUrl(env: InternalClientEnv): string {

@@ -59,6 +59,9 @@ export function createR2ImageHandler(deps: R2ImageHandlerDeps = {}) {
     // shared/CDN cache: the cache key is just the object key, so a cached copy
     // could be replayed to an unauthenticated caller. Serve those private.
     const signedAuth = pathTokenOk || queryTokenOk
+    // Trusting a legacy Canvas asset needs one browser-readable same-origin copy.
+    // Ordinary media must still redirect so repeated views never proxy bytes.
+    const trustImport = Boolean(user) && searchParams.get('trust_import') === '1'
 
     // Main-app-session authenticated reads (the app's own <img>/<video> loads)
     // get a 302 to a short-lived presigned R2 URL instead of having their bytes
@@ -74,7 +77,7 @@ export function createR2ImageHandler(deps: R2ImageHandlerDeps = {}) {
     // The signed-token (fal.ai) path deliberately keeps streaming below: fal's
     // image fetcher requires `Access-Control-Allow-Origin: *`, which we can
     // only guarantee from this function, not from a raw R2 presigned URL.
-    if (!signedAuth) {
+    if (!signedAuth && !trustImport) {
       // 1h expiry: long enough that a <video> paused then scrubbed later
       // won't hit an expired URL mid-playback, short enough to bound the
       // capability if the redirect URL ever leaks.
@@ -101,18 +104,21 @@ export function createR2ImageHandler(deps: R2ImageHandlerDeps = {}) {
       return NextResponse.json({ error: 'File not found' }, { status: 404 })
     }
 
-    // Only signed-token (fal.ai) requests reach this streaming path now —
-    // main-app-session reads were redirected to a presigned URL above. The signature
-    // lives in the URL, so the URL itself is the capability: safe to cache
-    // publicly for up to 1 hour (matches the token's expiry), and fal's image
-    // fetcher REQUIRES `Access-Control-Allow-Origin: *` or it returns "Failed
-    // to download the file". Don't remove the ACAO on this path.
-    const headers: Record<string, string> = {
-      'Content-Type': response.ContentType || 'application/octet-stream',
-      'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'public, max-age=3600',
-      'Access-Control-Allow-Origin': '*',
-    }
+    // Signed-token reads are public capabilities used by providers. A trust import
+    // is session-authenticated and private; it streams once so browser code can
+    // upload the legacy image into durable workspace storage without R2 CORS.
+    const headers: Record<string, string> = signedAuth
+      ? {
+          'Content-Type': response.ContentType || 'application/octet-stream',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'public, max-age=3600',
+          'Access-Control-Allow-Origin': '*',
+        }
+      : {
+          'Content-Type': response.ContentType || 'application/octet-stream',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'private, no-store',
+        }
     return new NextResponse(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer, { headers })
   } catch (error) {
     console.error('[R2 Image Proxy] Error:', error)

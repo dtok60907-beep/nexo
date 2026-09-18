@@ -22,7 +22,7 @@ test('durable video handler submits, polls, downloads, and persists a tenant ass
   assert.equal(puts.length, 1);
 });
 
-function trustedHandler({ links = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {} } = {}) {
+function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {} } = {}) {
   const submitted = [];
   const downloads = [];
   const lookups = [];
@@ -50,6 +50,7 @@ function trustedHandler({ links = {}, model = 'bytedance/seedance-2.5', env = {}
       const link = links[`${workspaceId}:${assetId}`];
       return link ? { project_name: env.BYTEPLUS_PROJECT_NAME || 'default', ...link } : null;
     },
+    findExactTrustedAsset: async ({ excludeAssetId }) => exactMatches[excludeAssetId] || null,
     createAsset: async () => ({ id: 'output-1' }),
     sleep: async () => {},
     env,
@@ -110,13 +111,39 @@ test('known BytePlus image deployment endpoint retains raw resolution', async ()
   assert.deepEqual(setup.lookups, []);
 });
 
-test('missing mapping retains raw data URL behavior', async () => {
-  const setup = trustedHandler();
+test('a processing duplicate mapping falls back to its active identical trusted asset', async () => {
+  const setup = trustedHandler({
+    links: { 'workspace-1:asset-1': { status: 'processing', provider_asset_id: 'processing-provider' } },
+    exactMatches: { 'asset-1': { id: 'trusted-original', provider_asset_id: 'active-provider' } },
+  });
 
   const request = await runTrusted(setup, { referenceImages: [assetUrl('asset-1')] });
 
-  assert.match(request.referenceImages[0], /^data:image\/png;base64,/);
+  assert.deepEqual(request.referenceImages, ['asset://active-provider']);
+  assert.equal(isTrustedAssetRequest(request), true);
   assert.equal(setup.downloads.length, 1);
+});
+
+test('an exact-byte duplicate reuses the original trusted provider asset', async () => {
+  const setup = trustedHandler({
+    exactMatches: { 'asset-1': { id: 'trusted-original', provider_asset_id: 'provider-1' } },
+  });
+
+  const request = await runTrusted(setup, { referenceImages: [assetUrl('asset-1')] });
+
+  assert.deepEqual(request.referenceImages, ['asset://provider-1']);
+  assert.equal(isTrustedAssetRequest(request), true);
+  assert.equal(setup.downloads.length, 1);
+});
+
+test('missing Seedance mapping rejects before provider submission', async () => {
+  const setup = trustedHandler();
+
+  await assert.rejects(
+    runTrusted(setup, { referenceImages: [assetUrl('asset-1')] }),
+    (error) => error.code === 'BYTEPLUS_REFERENCE_NOT_TRUSTED' && /active Trusted Asset/i.test(error.message),
+  );
+  assert.equal(setup.submitted.length, 0);
 });
 
 for (const [status, code, message] of [
@@ -130,7 +157,7 @@ for (const [status, code, message] of [
       runTrusted(setup, { referenceImages: [assetUrl('asset-1')] }),
       (error) => error.code === code && message.test(error.message),
     );
-    assert.deepEqual(setup.downloads, []);
+    assert.equal(setup.downloads.length, 1);
   });
 }
 
@@ -158,13 +185,15 @@ test('mapping from a different BytePlus project is rejected before substitution'
   assert.deepEqual(setup.downloads, []);
 });
 
-test('cross-workspace mapping is not used', async () => {
+test('cross-workspace mapping is not used or sent to Seedance', async () => {
   const setup = trustedHandler({ links: { 'workspace-2:asset-1': { status: 'active', provider_asset_id: 'other-workspace-provider' } } });
 
-  const request = await runTrusted(setup, { referenceImages: [assetUrl('asset-1')] });
-
-  assert.match(request.referenceImages[0], /^data:image\/png;base64,/);
+  await assert.rejects(
+    runTrusted(setup, { referenceImages: [assetUrl('asset-1')] }),
+    (error) => error.code === 'BYTEPLUS_REFERENCE_NOT_TRUSTED',
+  );
   assert.deepEqual(setup.lookups, [['workspace-1', 'asset-1']]);
+  assert.equal(setup.submitted.length, 0);
 });
 
 test('non-BytePlus models neither query mappings nor change raw resolution', async () => {
@@ -179,27 +208,23 @@ test('non-BytePlus models neither query mappings nor change raw resolution', asy
   assert.deepEqual(setup.lookups, []);
 });
 
-test('trusted substitution preserves frame and reference ordering', async () => {
+test('Seedance rejects a mixed trusted and raw frame/reference set before submission', async () => {
   const setup = trustedHandler({ links: {
     'workspace-1:frame-1': { status: 'active', provider_asset_id: 'trusted-frame' },
     'workspace-1:reference-2': { status: 'active', provider_asset_id: 'trusted-reference' },
   } });
 
-  const request = await runTrusted(setup, {
-    frameImages: [
-      { url: assetUrl('frame-1'), frameType: 'first_frame' },
-      { url: assetUrl('frame-2'), frameType: 'last_frame' },
-    ],
-    referenceImages: [assetUrl('reference-1'), assetUrl('reference-2')],
-  });
-
-  assert.deepEqual(request.frameImages.map((frame) => [frame.image_url.url, frame.frame_type]), [
-    ['asset://trusted-frame', 'first_frame'],
-    [request.frameImages[1].image_url.url, 'last_frame'],
-  ]);
-  assert.match(request.frameImages[1].image_url.url, /^data:image\/png;base64,/);
-  assert.match(request.referenceImages[0], /^data:image\/png;base64,/);
-  assert.equal(request.referenceImages[1], 'asset://trusted-reference');
+  await assert.rejects(
+    runTrusted(setup, {
+      frameImages: [
+        { url: assetUrl('frame-1'), frameType: 'first_frame' },
+        { url: assetUrl('frame-2'), frameType: 'last_frame' },
+      ],
+      referenceImages: [assetUrl('reference-1'), assetUrl('reference-2')],
+    }),
+    (error) => error.code === 'BYTEPLUS_REFERENCE_NOT_TRUSTED',
+  );
+  assert.equal(setup.submitted.length, 0);
 });
 
 for (const uri of ['asset://attacker-controlled', 'ASSET://attacker-controlled', ' asset://attacker-controlled']) {

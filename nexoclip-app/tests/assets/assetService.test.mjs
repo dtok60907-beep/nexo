@@ -26,6 +26,7 @@ test('imports image bytes into canonical workspace storage and metadata', async 
   const pool = {
     async query(text, values) {
       queries.push({ text, values });
+      if (text.startsWith('SELECT')) return { rows: [] };
       return { rows: [{ id: values[0], workspace_id: values[1], storage_key: values[2], filename: values[3], content_type: values[4], size_bytes: values[5] }] };
     },
   };
@@ -38,7 +39,59 @@ test('imports image bytes into canonical workspace storage and metadata', async 
   assert.match(result.url, /^\/api\/assets\/[0-9a-f-]+\/download\?workspace_id=workspace-1$/);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].contentType, 'image/png');
-  assert.equal(queries.length, 1);
+  assert.equal(queries.length, 2);
+});
+
+test('reuses an exact trusted workspace image instead of creating an untrusted duplicate', async () => {
+  let writes = 0;
+  const trusted = {
+    id: 'trusted-asset', workspace_id: 'workspace-1', storage_key: 'workspace-1/trusted',
+    filename: 'original.png', content_type: 'image/png', size_bytes: 5,
+    provider_asset_id: 'asset-byteplus-1',
+  };
+  const pool = {
+    async query(text) {
+      assert.match(text, /JOIN byteplus_asset_links/);
+      return { rows: [trusted] };
+    },
+  };
+  const storage = {
+    async createDownloadUrl({ key }) { return { url: `download:${key}` }; },
+    async get() { return { body: Buffer.from('image'), contentType: 'image/png' }; },
+    async put() { writes += 1; },
+  };
+
+  const result = await assetService.importWorkspaceAsset('workspace-1', {
+    filename: 'copy.png', contentType: 'image/png', body: Buffer.from('image'),
+  }, storage, pool);
+
+  assert.equal(result.asset.id, 'trusted-asset');
+  assert.equal(result.url, '/api/assets/trusted-asset/download?workspace_id=workspace-1');
+  assert.equal(writes, 0);
+});
+
+test('does not deduplicate same-size images whose bytes differ', async () => {
+  let writes = 0;
+  const pool = {
+    async query(text, values) {
+      if (text.startsWith('SELECT')) {
+        return { rows: [{ id: 'different-asset', storage_key: 'workspace-1/different' }] };
+      }
+      return { rows: [{ id: values[0], workspace_id: values[1], storage_key: values[2] }] };
+    },
+  };
+  const storage = {
+    async createDownloadUrl({ key }) { return { url: `download:${key}` }; },
+    async get() { return { body: Buffer.from('other'), contentType: 'image/png' }; },
+    async put() { writes += 1; },
+  };
+
+  const result = await assetService.importWorkspaceAsset('workspace-1', {
+    filename: 'copy.png', contentType: 'image/png', body: Buffer.from('image'),
+  }, storage, pool);
+
+  assert.notEqual(result.asset.id, 'different-asset');
+  assert.equal(writes, 1);
 });
 
 test('rejects non-image canonical imports', async () => {

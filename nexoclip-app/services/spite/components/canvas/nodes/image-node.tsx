@@ -16,6 +16,7 @@ import { folderMediaLabel } from '@/lib/canvas-media-label'
 import { getImageModels, getModelById, buildModelInput, type ModelConfig } from '@/lib/fal-models'
 import { estimateGenerationCost, formatUSD, COST_CONFIRM_THRESHOLD_USD } from '@/lib/fal-cost'
 import { resolveNodeMediaUrl } from '@/lib/node-media'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 import { compileMentionsForModel } from '@/lib/mention-prompt'
 import { useProjectFolders } from '@/hooks/use-project-folders'
 import { useImageTrust } from '@/hooks/use-image-trust'
@@ -142,6 +143,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   // Route segment is [id], so the param is `id` (not `projectId`).
   const projectId = params.id as string
+  const nodeLock = useNodeOwnershipLock(projectId, id)
   const [modelId, setModelId] = useState((data.modelId as string) || 'nano-banana-pro')
   const [aspectRatio, setAspectRatio] = useState((data.aspectRatio as string) || '')
   const [resolution, setResolution] = useState((data.resolution as string) || '')
@@ -158,7 +160,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const [status, setStatus] = useState<GenerationStatus>('idle')
   const [progress, setProgress] = useState<number | undefined>()
   const [error, setError] = useState<string | null>(null)
-  const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
+  const [outputUrl, setOutputUrl] = useState<string | null>(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
   const [generationId, setGenerationId] = useState<string | null>(null)
   // Timestamp of the most recent submission. Powers the relative-age
   // display in the right-side jobs panel.
@@ -186,16 +188,23 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   const { addEdges, addNodes, createNextShot, patchNodeData, replaceShot, updateNodeData } = useCanvasCollaboration()
   const updateNodeInternals = useUpdateNodeInternals()
   const syncGuardRef = useRef(createLocalStateSyncGuard())
+  // Collaboration methods are recreated when the shared canvas snapshot changes.
+  // Keep persistence wrappers stable so those renders cannot reset generation polling.
+  const patchNodeDataRef = useRef(patchNodeData)
+  const updateNodeDataRef = useRef(updateNodeData)
+  patchNodeDataRef.current = patchNodeData
+  updateNodeDataRef.current = updateNodeData
   const patchPersistedNodeData = useCallback((patch: Record<string, unknown>) => {
     if (!syncGuardRef.current.allowsPersistence()) return
-    patchNodeData(id, patch)
-  }, [id, patchNodeData])
+    patchNodeDataRef.current(id, patch)
+  }, [id])
   const updatePersistedNodeData = useCallback((updater: (currentData: Record<string, unknown>) => Record<string, unknown>) => {
     if (!syncGuardRef.current.allowsPersistence()) return
-    updateNodeData(id, updater)
-  }, [id, updateNodeData])
+    updateNodeDataRef.current(id, updater)
+  }, [id])
   const imageTrust = useImageTrust({
     url: outputUrl,
+    workspaceAssetId: data.workspaceAssetId,
     filename: `${String(data.label || 'generated-image')}.png`,
     enabled: Boolean(selected) && Boolean(outputUrl) && !['submitting', 'in_queue', 'in_progress'].includes(status),
     onCanonicalized: useCallback((canonicalUrl: string, workspaceAssetId: string) => {
@@ -224,9 +233,9 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     setStatus(durableStatus || (data.status as GenerationStatus) || ((data.outputUrl as string | undefined) ? 'completed' : 'idle'))
     setError((data.generationError as string) || (data.error as string) || null)
     setSubmittedAt((data.submittedAt as number) || undefined)
-    setOutputUrl(resolveNodeMediaUrl({ outputUrl: data.outputUrl }) || null)
+    setOutputUrl(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
     queueMicrotask(finishSync)
-  }, [data.aspectRatio, data.error, data.generationError, data.generationStatus, data.modelId, data.numImages, data.outputUrl, data.resolution, data.status, data.submittedAt])
+  }, [data.aspectRatio, data.error, data.generationError, data.generationStatus, data.modelId, data.numImages, data.outputUrl, data.resolution, data.status, data.submittedAt, data.workspaceAssetId])
 
   useEffect(() => {
     if (outputUrl && outputUrl !== announcedOutputRef.current) {
@@ -652,6 +661,10 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleGenerate = async () => {
+    if (!(await nodeLock.claim())) {
+      toast.error(nodeLock.error || 'Node sedang dikerjakan user lain.')
+      return
+    }
     const { connected, prompt: compiledPrompt } = resolveIncomingPrompt(id, getNodes(), getEdges())
     if (!connected) {
       setError('Connect a Text node first')
@@ -958,6 +971,12 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     <div
       className="relative group"
       style={{ width: 360 }}
+      onPointerDownCapture={(event) => {
+        if (nodeLock.owned) return
+        event.preventDefault()
+        event.stopPropagation()
+        void nodeLock.claim()
+      }}
     >
       <NodeActionToolbar
         nodeId={id}
