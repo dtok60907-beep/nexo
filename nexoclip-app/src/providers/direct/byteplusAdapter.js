@@ -18,7 +18,10 @@ export function createBytePlusAdapter({ apiKey, baseUrl, fetch: fetchImpl = glob
         detail = body?.error?.message || body?.message || null;
       } catch { /* no readable body */ }
       const suffix = detail ? `: ${detail}` : '';
-      throw Object.assign(new Error(`BytePlus direct request failed${suffix}`), { provider: 'byteplus', status: response.status, code: 'BYTEPLUS_REQUEST_FAILED' });
+      const assetNotFound = response.status === 404 || /(?:asset|reference)[^\n]*not found|not found[^\n]*(?:asset|reference)/i.test(detail || '');
+      throw Object.assign(new Error(`BytePlus direct request failed${suffix}`), {
+        provider: 'byteplus', status: response.status, code: 'BYTEPLUS_REQUEST_FAILED', assetNotFound,
+      });
     }
     return response;
   }
