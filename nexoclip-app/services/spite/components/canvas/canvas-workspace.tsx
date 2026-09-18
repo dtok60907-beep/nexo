@@ -526,6 +526,10 @@ function CanvasInner({ projectId }: { projectId: string }) {
     if (!allowDocumentMutation) {
       return
     }
+    if ((params.source && lockedNodeIds.has(params.source)) || (params.target && lockedNodeIds.has(params.target))) {
+      toast.error('This node is being edited by another collaborator')
+      return
+    }
 
     if (isValidConnection(params)) {
       commands.connect(params)
@@ -545,7 +549,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
         duration: 3000,
       })
     }
-  }, [allowDocumentMutation, commands, updateNodeInternals])
+  }, [allowDocumentMutation, commands, lockedNodeIds, updateNodeInternals])
   
   const [minimapOpen, setMinimapOpen] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowPos: { x: number; y: number } } | null>(null)
@@ -1268,11 +1272,16 @@ function CanvasInner({ projectId }: { projectId: string }) {
               onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
-              onNodeClick={() => {
-                // Close any open sticker pickers when clicking any node
+              onNodeClick={(_event, node) => {
+                // Ownership begins before toolbars/settings can be opened.
+                // Peers see it through awareness and their wrapper becomes
+                // pointer-events:none; server lease remains the mutation gate.
+                presenceControllerRef.current?.startDragLock(node.id)
                 window.dispatchEvent(new Event('closeStickerPickers'))
               }}
               onPaneClick={(e) => {
+                // Leaving a node releases its transient interaction lock.
+                presenceControllerRef.current?.stopDragLock()
                 // Always close any open sticker pickers
                 window.dispatchEvent(new Event('closeStickerPickers'))
 
