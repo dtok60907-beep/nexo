@@ -14,13 +14,18 @@ function errorResponse(error) {
   }, { status });
 }
 
-function deleteWorkspaceAsset(workspaceId, localAssetId) {
+function deleteWorkspaceAsset(workspaceId, localAssetId, cookie) {
   const provider = { deleteAsset: input => createBytePlusAssetsClient().deleteAsset(input) };
   return deleteTrustedWorkspaceAsset({
     workspaceId, localAssetId, pool: getPool(), storage: createStorage(), bytePlusClient: provider,
-    // Canvas-originated deletes clean authoritative references in Spite before
-    // entering this tenant-scoped boundary. Main Assets has no project mapping.
-    cleanupCanvasReferences: async () => ({ complete: true }),
+    cleanupCanvasReferences: async () => {
+      const spiteUrl = process.env.NEXT_PUBLIC_SPITE_URL?.trim().replace(/\/$/, '');
+      if (!spiteUrl || !/^https?:\/\//.test(spiteUrl)) return { complete: false };
+      const response = await fetch(`${spiteUrl}/api/assets/${encodeURIComponent(localAssetId)}?cleanup=1`, {
+        method: 'DELETE', headers: { cookie: cookie || '' },
+      });
+      return { complete: response.ok };
+    },
     configuredProjectName: process.env.BYTEPLUS_PROJECT_NAME?.trim() || 'default',
   });
 }
@@ -35,12 +40,15 @@ async function resolveDefaultTenant({ token }) {
 
 export function createAssetDeleteHandler(deps = {}) {
   const resolveTenant = deps.resolveTenantContext || resolveDefaultTenant;
-  const deleteAsset = deps.deleteWorkspaceAsset || deleteWorkspaceAsset;
+  const injectedDeleteAsset = deps.deleteWorkspaceAsset;
+  const deleteAsset = injectedDeleteAsset || deleteWorkspaceAsset;
   return async function DELETE(request, { params }) {
     try {
       const tenant = await resolveTenant({ token: request.cookies.get(SESSION_COOKIE)?.value });
       const { assetId } = await params;
-      const asset = await deleteAsset(tenant.workspace.id, assetId);
+      const asset = injectedDeleteAsset
+        ? await deleteAsset(tenant.workspace.id, assetId)
+        : await deleteAsset(tenant.workspace.id, assetId, request.headers?.get?.('cookie'));
       if (!asset) return Response.json({ error: 'Asset not found' }, { status: 404 });
       return Response.json({ success: true });
     } catch (error) {

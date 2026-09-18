@@ -149,18 +149,34 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
         const { assetId } = await params
         const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
         if (!asset) {
-          const projectId = new URL(request.url).searchParams.get('projectId')
-          if (!projectId || !(await userOwnsProject(sql, user.id, projectId))) return assetNotFoundResponse()
+          const search = new URL(request.url).searchParams
+          const projectId = search.get('projectId')
+          const cleanupOnly = search.get('cleanup') === '1'
+          if (!cleanupOnly && (!projectId || !(await userOwnsProject(sql, user.id, projectId)))) return assetNotFoundResponse()
 
-          const ownedProjects = await sql`
-            SELECT id::text AS id FROM projects WHERE userid = ${user.id}
-          ` as Array<{ id: string }>
-          const realtime = internalRealtime()
-          for (const { id } of ownedProjects) {
-            const { projection } = await realtime.exportDocument({ userId: user.id, projectId: id })
-            for (const patch of workspaceAssetReferencePatches(projection, assetId)) {
-              await realtime.patchNodeData({ userId: user.id, projectId: id, ...patch })
+          if (cleanupOnly) {
+            const ownedProjects = await sql`
+              SELECT id::text AS id FROM projects WHERE userid = ${user.id}
+            ` as Array<{ id: string }>
+            const realtime = internalRealtime()
+            for (const { id } of ownedProjects) {
+              const { projection } = await realtime.exportDocument({ userId: user.id, projectId: id })
+              for (const patch of workspaceAssetReferencePatches(projection, assetId)) {
+                await realtime.patchNodeData({ userId: user.id, projectId: id, ...patch })
+              }
             }
+            const removedRows = await sql`
+              DELETE FROM asset_folder_items
+              WHERE workspace_asset_id = ${assetId}
+                AND folder_id IN (
+                  SELECT f.id FROM asset_folders f
+                  JOIN projects p ON p.id = f.project_id
+                  WHERE p.userid = ${user.id}
+                )
+              RETURNING folder_id
+            ` as Array<{ folder_id: string }>
+            await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
+            return NextResponse.json({ complete: true })
           }
 
           const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')

@@ -18,7 +18,7 @@ function sqlForWorkspaceAsset() {
   }) as any
 }
 
-test('canonical Canvas references are removed before workspace deletion', async () => {
+test('internal cleanup removes canonical Canvas references before local deletion', async () => {
   const patched: any[] = []
   let proxied = false
   const handlers = createAssetRouteHandlers({
@@ -34,12 +34,12 @@ test('canonical Canvas references are removed before workspace deletion', async 
     env: { NEXOCLIP_INTERNAL_URL: 'http://nexoclip:3000' },
   } as any)
 
-  const response = await handlers.DELETE(new Request(`http://spite.test/api/assets/asset-1?projectId=${PROJECT_ID}`, {
+  const response = await handlers.DELETE(new Request('http://spite.test/api/assets/asset-1?cleanup=1', {
     method: 'DELETE', headers: { cookie: 'session=abc' },
   }), { params: Promise.resolve({ assetId: 'asset-1' }) })
 
   assert.equal(response.status, 200)
-  assert.equal(proxied, true)
+  assert.equal(proxied, false)
   assert.deepEqual(patched[0].unset.sort(), ['outputUrl', 'workspaceAssetId'])
 })
 
