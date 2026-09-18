@@ -2,11 +2,27 @@ import { SESSION_COOKIE } from '../../../../src/lib/auth/session.js';
 import { resolveTenantContext } from '../../../../src/services/tenantContext.js';
 import { getCurrentSession } from '../../../../src/services/authService.js';
 import { getDefaultWorkspace } from '../../../../src/services/workspaceService.js';
-import { deleteWorkspaceAsset } from '../../../../src/services/assetService.js';
+import { createStorage } from '../../../../src/services/assetService.js';
+import { getPool } from '../../../../src/db/pool.js';
+import { createBytePlusAssetsClient } from '../../../../src/providers/byteplusAssetsClient.js';
+import { deleteTrustedWorkspaceAsset } from '../../../../src/services/unifiedAssetDeletionService.js';
 
 function errorResponse(error) {
   const status = error.status || (error.message === 'Authentication required' ? 401 : error.message === 'Workspace access denied' ? 403 : 400);
-  return Response.json({ error: error.message }, { status });
+  return Response.json({
+    error: error.code ? { code: error.code, message: error.message, retryable: Boolean(error.retryable) } : { message: error.message },
+  }, { status });
+}
+
+function deleteWorkspaceAsset(workspaceId, localAssetId) {
+  const provider = { deleteAsset: input => createBytePlusAssetsClient().deleteAsset(input) };
+  return deleteTrustedWorkspaceAsset({
+    workspaceId, localAssetId, pool: getPool(), storage: createStorage(), bytePlusClient: provider,
+    // Canvas-originated deletes clean authoritative references in Spite before
+    // entering this tenant-scoped boundary. Main Assets has no project mapping.
+    cleanupCanvasReferences: async () => ({ complete: true }),
+    configuredProjectName: process.env.BYTEPLUS_PROJECT_NAME?.trim() || 'default',
+  });
 }
 
 async function resolveDefaultTenant({ token }) {

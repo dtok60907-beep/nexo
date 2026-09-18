@@ -16,6 +16,7 @@ import {
   type InternalRealtimeClient,
 } from '@/lib/realtime/internal-client'
 import { getR2Client } from '@/lib/r2-upload'
+import { workspaceAssetReferencePatches } from '@/lib/workspace-asset-delete'
 
 function assetKeyFromUrl(url: string | null): string | null {
   if (!url) return null
@@ -155,11 +156,11 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             SELECT id::text AS id FROM projects WHERE userid = ${user.id}
           ` as Array<{ id: string }>
           const realtime = internalRealtime()
-          const authoritativeDocuments = await Promise.all(
-            ownedProjects.map(({ id }) => realtime.exportDocument({ userId: user.id, projectId: id })),
-          )
-          if (authoritativeDocuments.some(({ projection }) => projectionHasMediaReference(projection, { assetId }))) {
-            return NextResponse.json({ error: 'Asset is still used on a canvas' }, { status: 403 })
+          for (const { id } of ownedProjects) {
+            const { projection } = await realtime.exportDocument({ userId: user.id, projectId: id })
+            for (const patch of workspaceAssetReferencePatches(projection, assetId)) {
+              await realtime.patchNodeData({ userId: user.id, projectId: id, ...patch })
+            }
           }
 
           const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')
@@ -171,7 +172,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           if (upstream.ok) {
             const removedRows = await sql`
               DELETE FROM asset_folder_items
-              WHERE asset_id = ${assetId}
+              WHERE workspace_asset_id = ${assetId}
                 AND folder_id IN (
                   SELECT f.id FROM asset_folders f
                   JOIN projects p ON p.id = f.project_id
