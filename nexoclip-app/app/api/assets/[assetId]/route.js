@@ -19,7 +19,7 @@ function deleteWorkspaceAsset(workspaceId, localAssetId, cookie) {
   return deleteTrustedWorkspaceAsset({
     workspaceId, localAssetId, pool: getPool(), storage: createStorage(), bytePlusClient: provider,
     cleanupCanvasReferences: async () => {
-      const spiteUrl = process.env.NEXT_PUBLIC_SPITE_URL?.trim().replace(/\/$/, '');
+      const spiteUrl = (process.env.SPITE_INTERNAL_URL || process.env.NEXT_PUBLIC_SPITE_URL)?.trim().replace(/\/$/, '');
       if (!spiteUrl || !/^https?:\/\//.test(spiteUrl)) return { complete: false };
       const response = await fetch(`${spiteUrl}/api/assets/${encodeURIComponent(localAssetId)}?cleanup=1`, {
         method: 'DELETE', headers: { cookie: cookie || '' },
