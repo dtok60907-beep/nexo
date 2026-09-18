@@ -755,8 +755,11 @@ function CanvasInner({ projectId }: { projectId: string }) {
 
   const deleteSelected = useCallback(() => {
     if (!allowDocumentMutation) return
-    const selectedIds = new Set(selectedNodeIds)
-    if (selectedIds.size === 0) return
+    const selectedIds = new Set(selectedNodeIds.filter((nodeId) => !lockedNodeIdsRef.current.has(nodeId)))
+    if (selectedIds.size === 0) {
+      if (selectedNodeIds.length > 0) toast.error('This node is being edited by another collaborator')
+      return
+    }
 
     const toDelete = allNodes.filter((node) => selectedIds.has(node.id))
     commands.batch(({ deleteNode }) => {
