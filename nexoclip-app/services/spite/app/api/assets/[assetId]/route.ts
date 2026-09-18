@@ -5,6 +5,7 @@ import { getDb } from '@/lib/db'
 import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   assetNotFoundResponse,
+  deleteEmptyAssetFolders,
   findOwnedGenerationAsset,
   unauthorizedResponse,
   userOwnsProject,
@@ -168,7 +169,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             headers: { cookie: request.headers.get('cookie') ?? '' },
           })
           if (upstream.ok) {
-            await sql`
+            const removedRows = await sql`
               DELETE FROM asset_folder_items
               WHERE asset_id = ${assetId}
                 AND folder_id IN (
@@ -176,7 +177,9 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
                   JOIN projects p ON p.id = f.project_id
                   WHERE p.userid = ${user.id}
                 )
-            `
+              RETURNING folder_id
+            ` as Array<{ folder_id: string }>
+            await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
           }
           return new NextResponse(await upstream.text(), {
             status: upstream.status,
@@ -189,6 +192,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           RETURNING folder_id
         ` as { folder_id: string }[]
         const removedFromFolders = removedRows.length
+        const deletedFolders = await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
 
         const projectionSequence = await sql`
           SELECT durable_seq, projected_seq
@@ -241,6 +245,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             kept: true,
             reason: 'still_on_canvas',
             removed_from_folders: removedFromFolders,
+            deleted_folders: deletedFolders,
           })
         }
 
@@ -264,6 +269,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           success: true,
           kept: false,
           removed_from_folders: removedFromFolders,
+          deleted_folders: deletedFolders,
         })
       } catch (error: any) {
         console.error('[assets] Delete error:', error)

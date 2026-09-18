@@ -57,6 +57,21 @@ export async function findOwnedGenerationAsset(sql: Sql, userId: string, assetId
   return rows[0] ?? null
 }
 
+export async function deleteEmptyAssetFolders(sql: Sql, folderIds: string[]): Promise<number> {
+  if (folderIds.length === 0) return 0
+
+  const rows = await sql`
+    DELETE FROM asset_folders f
+    WHERE f.id = ANY(${folderIds}::text[])
+      AND NOT EXISTS (
+        SELECT 1 FROM asset_folder_items i WHERE i.folder_id = f.id
+      )
+    RETURNING f.id
+  ` as Array<{ id: string }>
+
+  return rows.length
+}
+
 export async function countOwnedGenerationAssetsForProject(
   sql: Sql,
   userId: string,

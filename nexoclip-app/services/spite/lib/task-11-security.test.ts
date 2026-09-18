@@ -36,6 +36,7 @@ function makeRequest(url: string, {
 test('assets/[assetId] hides foreign assets and only deletes owned stored keys', async () => {
   const r2Deletes: string[] = []
   let deleteRowCalled = false
+  let emptyFolderDeleted = false
   let sawProjectionLagCheck = false
 
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -51,7 +52,13 @@ test('assets/[assetId] hides foreign assets and only deletes owned stored keys',
     }
 
     if (normalized.startsWith('delete from asset_folder_items where asset_id = ? returning folder_id')) {
-      return []
+      return [{ folder_id: '550e8400-e29b-41d4-a716-446655440001' }]
+    }
+
+    if (normalized.startsWith('delete from asset_folders f') && normalized.includes('not exists')) {
+      emptyFolderDeleted = true
+      assert.deepEqual(values[0], ['550e8400-e29b-41d4-a716-446655440001'])
+      return [{ id: '550e8400-e29b-41d4-a716-446655440001' }]
     }
 
     if (normalized.startsWith('select durable_seq, projected_seq from canvas_yjs_documents where project_id = ?')) {
@@ -100,6 +107,7 @@ test('assets/[assetId] hides foreign assets and only deletes owned stored keys',
   assert.equal(ownedResponse.status, 200)
   assert.equal(sawProjectionLagCheck, true)
   assert.equal(deleteRowCalled, true)
+  assert.equal(emptyFolderDeleted, true)
   assert.deepEqual(r2Deletes, ['uploads/owned.png'])
 })
 

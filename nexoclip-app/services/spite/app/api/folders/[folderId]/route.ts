@@ -5,6 +5,7 @@ import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   assetNotFoundResponse,
   countOwnedGenerationAssetsForProject,
+  deleteEmptyAssetFolders,
   folderNotFoundResponse,
   unauthorizedResponse,
   userOwnsFolder,
@@ -167,7 +168,13 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           }
         }
 
-        return NextResponse.json({ success: true })
+        const shouldDeleteIfEmpty = Array.isArray(setAssetIds)
+          || (Array.isArray(removeAssetIds) && removeAssetIds.length > 0)
+        const deleted = shouldDeleteIfEmpty
+          ? await deleteEmptyAssetFolders(sql, [folderId]) > 0
+          : false
+
+        return NextResponse.json({ success: true, deleted })
       } catch (err: any) {
         console.error('[folders] PATCH error:', err)
         return NextResponse.json(
