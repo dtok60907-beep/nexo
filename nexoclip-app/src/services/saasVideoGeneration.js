@@ -45,6 +45,7 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
   if (!pool || !storage || !providerRouter) throw new TypeError('pool, storage, and provider router are required');
   return async (job) => {
     let hasTrustedAsset = false;
+    const deferredTrustedAssetErrors = new Map();
     const projectName = env.BYTEPLUS_PROJECT_NAME?.trim() || 'default';
     const resolveWorkspaceAsset = isDirectBytePlusSeedance(job.model, env)
       ? async ({ workspaceId, assetId }) => {
@@ -59,7 +60,11 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
           hasTrustedAsset = true;
           return `asset://${link.provider_asset_id.trim()}`;
         }
-        throw trustedAssetError(link.status);
+        // A duplicate may have a newer Trust attempt still processing while an
+        // identical older asset is already active. Let byte-exact recovery run
+        // before surfacing this mapping's actionable error.
+        deferredTrustedAssetErrors.set(assetId, trustedAssetError(link.status));
+        return null;
       }
       : undefined;
     const resolveWorkspaceAssetContent = resolveWorkspaceAsset
@@ -67,9 +72,13 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
         const match = await findExactTrustedAsset({
           workspaceId, body, contentType, excludeAssetId: assetId, projectName,
         }, storage, pool);
-        if (!match?.provider_asset_id?.trim()) return null;
-        hasTrustedAsset = true;
-        return `asset://${match.provider_asset_id.trim()}`;
+        if (match?.provider_asset_id?.trim()) {
+          hasTrustedAsset = true;
+          return `asset://${match.provider_asset_id.trim()}`;
+        }
+        const deferredError = deferredTrustedAssetErrors.get(assetId);
+        if (deferredError) throw deferredError;
+        return null;
       }
       : undefined;
     const resolution = { workspaceId: job.workspace_id, pool, storage, referenceStorage, resolveWorkspaceAsset, resolveWorkspaceAssetContent };

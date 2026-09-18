@@ -111,6 +111,19 @@ test('known BytePlus image deployment endpoint retains raw resolution', async ()
   assert.deepEqual(setup.lookups, []);
 });
 
+test('a processing duplicate mapping falls back to its active identical trusted asset', async () => {
+  const setup = trustedHandler({
+    links: { 'workspace-1:asset-1': { status: 'processing', provider_asset_id: 'processing-provider' } },
+    exactMatches: { 'asset-1': { id: 'trusted-original', provider_asset_id: 'active-provider' } },
+  });
+
+  const request = await runTrusted(setup, { referenceImages: [assetUrl('asset-1')] });
+
+  assert.deepEqual(request.referenceImages, ['asset://active-provider']);
+  assert.equal(isTrustedAssetRequest(request), true);
+  assert.equal(setup.downloads.length, 1);
+});
+
 test('an exact-byte duplicate reuses the original trusted provider asset', async () => {
   const setup = trustedHandler({
     exactMatches: { 'asset-1': { id: 'trusted-original', provider_asset_id: 'provider-1' } },
@@ -143,7 +156,7 @@ for (const [status, code, message] of [
       runTrusted(setup, { referenceImages: [assetUrl('asset-1')] }),
       (error) => error.code === code && message.test(error.message),
     );
-    assert.deepEqual(setup.downloads, []);
+    assert.equal(setup.downloads.length, 1);
   });
 }
 
