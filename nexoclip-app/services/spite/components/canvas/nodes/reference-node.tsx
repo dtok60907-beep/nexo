@@ -3,7 +3,7 @@
 import { Position, NodeProps, Handle } from '@xyflow/react'
 import { useParams } from 'next/navigation'
 import { Image as ImageIcon, UploadSimple, CircleNotch, VideoCamera, SpeakerHigh } from '@phosphor-icons/react'
-import { memo, useState, useEffect, useRef } from 'react'
+import { memo, useState, useEffect, useRef, useCallback } from 'react'
 import { NodeActionToolbar } from './node-toolbar'
 import { ShotSelector } from './shot-selector'
 import { useSceneShots } from './use-scene-shots'
@@ -12,21 +12,24 @@ import { resolveNodeMediaUrl } from '@/lib/node-media'
 import { Lightbox } from '../lightbox'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { ResizableNodeFrame } from './resizable-node-frame'
+import { useImageTrust } from '@/hooks/use-image-trust'
+import { useNodeOwnershipLock } from '@/hooks/use-node-ownership-lock'
 
 function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   const params = useParams()
   const projectId = (params?.id as string) || ''
+  const nodeLock = useNodeOwnershipLock(projectId, id)
   const { createNextShot, patchNodeData, replaceShot } = useCanvasCollaboration()
-  const [thumbnail, setThumbnail] = useState<string | null>(resolveNodeMediaUrl({ thumbnail: data.thumbnail }) || null)
+  const [thumbnail, setThumbnail] = useState<string | null>(resolveNodeMediaUrl(data as Record<string, unknown>) || null)
   const [folderModalOpen, setFolderModalOpen] = useState(false)
   const [folderType, setFolderType] = useState<'character' | 'prop' | 'location'>('character')
   const [lightboxOpen, setLightboxOpen] = useState(false)
 
   // Sync thumbnail from data prop
   useEffect(() => {
-    const nextThumbnail = resolveNodeMediaUrl({ thumbnail: data.thumbnail }) || null
+    const nextThumbnail = resolveNodeMediaUrl(data as Record<string, unknown>) || null
     if (nextThumbnail !== thumbnail) setThumbnail(nextThumbnail)
-  }, [data.thumbnail, thumbnail])
+  }, [data.thumbnail, data.workspaceAssetId, thumbnail])
 
   // Reference nodes used to read/write `selectedShotId` while image and
   // video generator nodes used `shotId`. That field-name split made the
@@ -45,8 +48,20 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   const isUploading = data.isUploading as boolean
   const isAudio = (data.mediaType as string) === 'audio' || /\.(mp3|wav|m4a|ogg|aac|flac)(\?|$)/i.test(thumbnail || '')
   const isVideo = !isAudio && ((data.mediaType as string) === 'video' || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(thumbnail || ''))
+  const imageTrust = useImageTrust({
+    url: thumbnail,
+    workspaceAssetId: data.workspaceAssetId,
+    filename: `${String(data.label || 'reference-image')}.png`,
+    enabled: Boolean(selected) && Boolean(thumbnail) && !isUploading && !isAudio && !isVideo,
+    onCanonicalized: useCallback(async (canonicalUrl: string, workspaceAssetId: string) => {
+      if (!(await nodeLock.claim())) return
+      setThumbnail(canonicalUrl)
+      patchNodeData(id, { thumbnail: canonicalUrl, assetId: workspaceAssetId, workspaceAssetId })
+    }, [id, nodeLock, patchNodeData]),
+  })
 
-  const handleShotSelect = (shotId: string) => {
+  const handleShotSelect = async (shotId: string) => {
+    if (!(await nodeLock.claim())) return
     // Empty string from the selector means "unassign". Storing undefined
     // keeps the data object clean and matches the image/video-gen path.
     // Also strips the legacy `selectedShotId` so the two fields can't
@@ -60,7 +75,8 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   // Take a shot over exclusively: assign it here and clear it from whatever
   // other node in the SAME scene currently holds it (under shotId or the legacy
   // selectedShotId field).
-  const handleShotReplace = (shotId: string) => {
+  const handleShotReplace = async (shotId: string) => {
+    if (!(await nodeLock.claim())) return
     replaceShot(id, shotId)
   }
 
@@ -68,11 +84,13 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
   // shot number after the highest existing shot in the SAME scene.
   // Scenes are isolated by sceneId so two scenes can both have a
   // "Shot 1" without colliding.
-  const handleNewShot = () => {
+  const handleNewShot = async () => {
+    if (!(await nodeLock.claim())) return
     createNextShot(id)
   }
 
-  const handleAddToFolder = (type: 'character' | 'prop' | 'location') => {
+  const handleAddToFolder = async (type: 'character' | 'prop' | 'location') => {
+    if (!(await nodeLock.claim())) return
     setFolderType(type)
     setFolderModalOpen(true)
   }
@@ -84,6 +102,8 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
       defaultSize={{ width: 320, height: 260 }}
       bounds={{ minWidth: 180, minHeight: 96, maxWidth: 900, maxHeight: 900 }}
       className="group"
+      claimLock={nodeLock.claim}
+      releaseLock={nodeLock.release}
     >
       <NodeActionToolbar
         nodeId={id}
@@ -92,6 +112,13 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
         assetId={data.assetId as string}
         assetUrl={thumbnail || undefined}
         assetType={isAudio ? 'image' : isVideo ? 'video' : 'image'}
+        trustAction={thumbnail && !isAudio && !isVideo ? {
+          label: imageTrust.label,
+          disabled: imageTrust.disabled,
+          active: imageTrust.state.status === 'active',
+          processing: imageTrust.inFlight || imageTrust.state.status === 'processing',
+          onClick: imageTrust.trust,
+        } : undefined}
         onAddToFolder={handleAddToFolder}
         onViewFullscreen={thumbnail && !isAudio ? () => setLightboxOpen(true) : undefined}
       />

@@ -47,6 +47,24 @@ test('extracts a video_url input_reference into referenceVideos for video-to-vid
   assert.deepEqual(submittedParams.referenceImages, []);
 });
 
+test('rejects client asset URIs before public video submission', async () => {
+  let submissions = 0;
+  const handler = createVideoSubmitHandler({
+    resolveTenant: async () => ({ workspace: { id: 'ws-1' } }),
+    submitVideo: async () => { submissions += 1; return { id: 'unsafe' }; },
+  });
+
+  for (const body of [
+    { model: 'bytedance/seedance-2.5', prompt: 'x', input_references: [{ image_url: { url: 'asset://attacker' } }] },
+    { model: 'bytedance/seedance-2.5', prompt: 'x', frame_images: [{ image_url: { url: ' ASSET://attacker' } }] },
+  ]) {
+    const response = await handler(postReq(body));
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).code, 'INVALID_REFERENCE_IMAGE');
+  }
+  assert.equal(submissions, 0);
+});
+
 test('stores provider polling metadata and marks the durable video job running', async () => {
   let createdParams; let updated;
   const handler = createVideoSubmitHandler({

@@ -31,14 +31,15 @@ export function createBytePlusAdapter({ apiKey, baseUrl, fetch: fetchImpl = glob
       // (e.g. the mini variant) reject an image_url with no role ("role must be
       // specified for image contents"); others silently accept it without one. Always
       // sending it is the only combination confirmed to work across model variants.
-      const images = referenceImages?.length
-        ? referenceImages
-        : (frameImages || []).map((frame) => frame?.image_url?.url).filter(Boolean);
+      const images = [
+        ...(referenceImages || []),
+        ...(frameImages || []).map((frame) => frame?.image_url?.url).filter(Boolean),
+      ];
       for (const image of images) content.push({ type: 'image_url', role: 'reference_image', image_url: { url: image } });
       for (const video of referenceVideos || []) content.push({ type: 'video_url', role: 'reference_video', video_url: { url: video } });
       // Video generation is async-task based and lives under /tasks — /contents/generations
       // (used for images) silently accepts the request and returns an empty 200 for video models.
-      const response = await request('/contents/generations/tasks', { method: 'POST', body: JSON.stringify({ model, content, ...(duration !== undefined ? { duration } : {}), ...(resolution ? { resolution } : {}), ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}), ...(generateAudio !== undefined ? { generate_audio: generateAudio } : {}) }) });
+      const response = await request('/contents/generations/tasks', { method: 'POST', body: JSON.stringify({ model, content, ...(duration !== undefined ? { duration } : {}), ...(resolution ? { resolution } : {}), ...(aspectRatio ? { ratio: aspectRatio } : {}), ...(generateAudio !== undefined ? { generate_audio: generateAudio } : {}) }) });
       const payload = await response.json();
       return { ...payload, provider: 'byteplus', polling_url: payload.polling_url || null };
     },

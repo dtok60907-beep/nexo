@@ -36,12 +36,13 @@ function makeRequest(url: string, {
 test('assets/[assetId] hides foreign assets and only deletes owned stored keys', async () => {
   const r2Deletes: string[] = []
   let deleteRowCalled = false
+  let emptyFolderDeleted = false
   let sawProjectionLagCheck = false
 
   const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
 
-    if (normalized.includes('from generation_history g join projects p on p.id = g.project_id')) {
+    if (normalized.includes('from generation_history g join projects p on p.id::text = g.project_id')) {
       const userId = String(values[0])
       const assetId = String(values[1])
       if (userId === OWNER_ID && assetId === 'owned-asset') {
@@ -51,7 +52,13 @@ test('assets/[assetId] hides foreign assets and only deletes owned stored keys',
     }
 
     if (normalized.startsWith('delete from asset_folder_items where asset_id = ? returning folder_id')) {
-      return []
+      return [{ folder_id: '550e8400-e29b-41d4-a716-446655440001' }]
+    }
+
+    if (normalized.startsWith('delete from asset_folders f') && normalized.includes('not exists')) {
+      emptyFolderDeleted = true
+      assert.deepEqual(values[0], ['550e8400-e29b-41d4-a716-446655440001'])
+      return [{ id: '550e8400-e29b-41d4-a716-446655440001' }]
     }
 
     if (normalized.startsWith('select durable_seq, projected_seq from canvas_yjs_documents where project_id = ?')) {
@@ -100,7 +107,57 @@ test('assets/[assetId] hides foreign assets and only deletes owned stored keys',
   assert.equal(ownedResponse.status, 200)
   assert.equal(sawProjectionLagCheck, true)
   assert.equal(deleteRowCalled, true)
+  assert.equal(emptyFolderDeleted, true)
   assert.deepEqual(r2Deletes, ['uploads/owned.png'])
+})
+
+test('asset canonicalization verifies an owned main-app image before replacing its URL', async () => {
+  const canonical = '/api/assets/550e8400-e29b-41d4-a716-446655440010/download?workspace_id=550e8400-e29b-41d4-a716-446655440020'
+  let storedUrl = ''
+  let fetchCalls = 0
+  const sql = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalized.includes('from generation_history g join projects p on p.id::text = g.project_id')) {
+      return [{ id: 'owned-asset', project_id: OWNER_PROJECT_ID, r2_url: '/api/r2-image/old.png' }]
+    }
+    if (normalized.startsWith('update generation_history set r2_url = ?')) {
+      storedUrl = String(values[0])
+      assert.equal(String(values[1]), 'owned-asset')
+      assert.equal(String(values[2]), OWNER_PROJECT_ID)
+      return []
+    }
+    throw new Error(`Unhandled SQL in canonical asset test: ${normalized}`)
+  }
+  const handlers = createAssetRouteHandlers({
+    getDb: () => sql as any,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    env: { NEXOCLIP_INTERNAL_URL: 'http://main.internal' },
+    fetchFn: async (url, init) => {
+      fetchCalls += 1
+      assert.equal(String(url), `http://main.internal${canonical}`)
+      assert.equal(new Headers(init?.headers).get('cookie'), 'nexoclip_session=secret')
+      return new Response('image', { headers: { 'content-type': 'image/png' } })
+    },
+  })
+
+  const invalid = await handlers.PATCH(
+    makeRequest('http://spite.local/api/assets/owned-asset', { method: 'PATCH', body: { canonical_url: 'https://evil.test/image.png' } }) as any,
+    { params: Promise.resolve({ assetId: 'owned-asset' }) } as any,
+  )
+  assert.equal(invalid.status, 400)
+  assert.equal(fetchCalls, 0)
+
+  const response = await handlers.PATCH(
+    makeRequest('http://spite.local/api/assets/owned-asset', {
+      method: 'PATCH',
+      body: { canonical_url: canonical },
+      headers: { cookie: 'nexoclip_session=secret' },
+    }) as any,
+    { params: Promise.resolve({ assetId: 'owned-asset' }) } as any,
+  )
+  assert.equal(response.status, 200)
+  assert.equal(fetchCalls, 1)
+  assert.equal(storedUrl, canonical)
 })
 
 test('assets/by-url requires projectId and scopes lookup/update to owned projects', async () => {

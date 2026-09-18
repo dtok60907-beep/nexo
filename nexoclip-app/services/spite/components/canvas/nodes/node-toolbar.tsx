@@ -28,6 +28,8 @@ import {
   GridFour,
   Rows,
   Columns,
+  ShieldCheck,
+  CircleNotch,
 } from '@phosphor-icons/react'
 
 interface NodeActionToolbarProps {
@@ -45,6 +47,13 @@ interface NodeActionToolbarProps {
   assetUrl?: string
   assetType?: 'image' | 'video'
   nodeLabel?: string
+  trustAction?: {
+    label: string
+    disabled: boolean
+    active: boolean
+    processing: boolean
+    onClick: () => void
+  }
 }
 
 async function downloadAsset(url: string, suggestedName: string) {
@@ -92,6 +101,7 @@ export function NodeActionToolbar({
   assetUrl,
   assetType,
   nodeLabel,
+  trustAction,
 }: NodeActionToolbarProps) {
   const [runMenuOpen, setRunMenuOpen] = useState(false)
   const [connectMenuOpen, setConnectMenuOpen] = useState(false)
@@ -382,6 +392,17 @@ export function NodeActionToolbar({
         {/* Move to page */}
         <ToolBtn icon={ArrowSquareOut} label="Move to page" onClick={() => onMoveToPage?.(2)} />
 
+        {trustAction && (
+          <ToolBtn
+            icon={trustAction.processing ? CircleNotch : ShieldCheck}
+            label={trustAction.label || 'Trust for Seedance'}
+            onClick={trustAction.onClick}
+            disabled={trustAction.disabled}
+            accent={trustAction.active}
+            spinning={trustAction.processing}
+          />
+        )}
+
         <div className="w-px h-3.5 bg-white/10 mx-0.5" />
 
         {/* More options with Add to submenu */}
@@ -477,19 +498,25 @@ function ToolBtn({
   label,
   accent,
   danger,
+  disabled,
+  spinning,
   onClick,
 }: {
   icon: React.ElementType
   label: string
   accent?: boolean
   danger?: boolean
+  disabled?: boolean
+  spinning?: boolean
   onClick?: () => void
 }) {
   return (
     <button
       onClick={onClick}
       title={label}
-      className={`flex items-center justify-center w-6 h-6 rounded-full transition-colors ${
+      aria-label={label}
+      disabled={disabled}
+      className={`flex items-center justify-center w-6 h-6 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
         accent
           ? 'bg-accent/20 text-accent hover:bg-accent hover:text-accent-foreground'
           : danger
@@ -497,7 +524,7 @@ function ToolBtn({
           : 'text-muted-foreground hover:text-foreground hover:bg-white/10'
       }`}
     >
-      <Icon size={12} weight={accent ? 'fill' : 'regular'} />
+      <Icon size={12} weight={accent ? 'fill' : 'regular'} className={spinning ? 'animate-spin' : undefined} />
     </button>
   )
 }

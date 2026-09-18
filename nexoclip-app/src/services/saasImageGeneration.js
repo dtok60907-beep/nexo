@@ -17,10 +17,10 @@ function legacyR2Key(reference) {
   }
 }
 
-export async function resolveReferenceImages({ workspaceId, referenceImages, pool, storage, referenceStorage = storage }) {
+export async function resolveReferenceImages({ workspaceId, referenceImages, pool, storage, referenceStorage = storage, resolveWorkspaceAsset, resolveWorkspaceAssetContent }) {
   if (!referenceImages?.length) return [];
   return Promise.all(referenceImages.map(async (reference) => {
-    if (typeof reference !== 'string') throw Object.assign(new Error('Invalid asset reference'), { code: 'INVALID_REFERENCE_IMAGE' });
+    if (typeof reference !== 'string' || /^\s*asset:\/\//i.test(reference)) throw Object.assign(new Error('Invalid asset reference'), { code: 'INVALID_REFERENCE_IMAGE' });
 
     // Legacy Spite folders retain /spite/api/r2-image/<key> URLs. They are
     // browser proxy paths, not provider-fetchable URLs. Read the object with
@@ -41,8 +41,15 @@ export async function resolveReferenceImages({ workspaceId, referenceImages, poo
     );
     const asset = result.rows[0];
     if (!asset) throw Object.assign(new Error('Reference asset not found'), { code: 'REFERENCE_ASSET_NOT_FOUND' });
+    const resolved = await resolveWorkspaceAsset?.({ workspaceId, assetId, asset });
+    if (resolved) return resolved;
     const download = await storage.createDownloadUrl({ key: asset.storage_key });
     const object = await storage.get(download.url || download);
+    const resolvedByContent = await resolveWorkspaceAssetContent?.({
+      workspaceId, assetId, asset, body: object.body,
+      contentType: object.contentType || asset.content_type,
+    });
+    if (resolvedByContent) return resolvedByContent;
     return dataUrl(object.body, object.contentType || asset.content_type);
   }));
 }

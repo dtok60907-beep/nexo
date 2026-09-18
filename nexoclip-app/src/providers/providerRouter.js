@@ -5,7 +5,26 @@ import { createGoogleImageAdapter } from './direct/imageAdapters.js';
 import { createBytePlusImageAdapter } from './direct/imageAdapters.js';
 import { createBytePlusAdapter } from './direct/byteplusAdapter.js';
 import { createOpenAIVideoAdapter } from './direct/openaiVideoAdapter.js';
-import { getDirectProvider, resolveDirectProviderModel, isRetryableProviderError, createDirectProviderUnavailableError } from './providerRegistry.js';
+import { getDirectProvider, resolveDirectProviderModel, isDirectBytePlusSeedance, isRetryableProviderError, createDirectProviderUnavailableError } from './providerRegistry.js';
+
+const TRUSTED_ASSET_REQUEST = Symbol('trustedBytePlusAssetRequest');
+
+export function markTrustedAssetRequest(params) {
+  Object.defineProperty(params, TRUSTED_ASSET_REQUEST, { value: true });
+  return params;
+}
+
+export function isTrustedAssetRequest(params) {
+  return params?.[TRUSTED_ASSET_REQUEST] === true;
+}
+
+function hasAssetUri(params) {
+  const urls = [
+    ...(params?.referenceImages || []),
+    ...(params?.frameImages || []).map((frame) => frame?.image_url?.url),
+  ];
+  return urls.some((url) => typeof url === 'string' && url.trim().toLowerCase().startsWith('asset://'));
+}
 
 function directConfigured(env, provider) {
   if (provider === 'google') return Boolean(env.GEMINI_API_KEY || env.GOOGLE_API_KEY);
@@ -63,10 +82,18 @@ export function createProviderRouter({ env = process.env, fetch: fetchImpl = glo
   }
 
   async function run(operation, params, primary) {
+    if (operation === 'video' && hasAssetUri(params) && !isTrustedAssetRequest(params)) {
+      throw Object.assign(new Error('Provider asset references must be resolved by the workspace service'), {
+        code: 'INVALID_REFERENCE_IMAGE', status: 400,
+      });
+    }
     const mapping = getDirectProvider(params.model);
     // BytePlus endpoint IDs are deployment-specific and are not valid OpenRouter model IDs.
     // Dedicated aliases with endpointEnv must resolve to endpoint IDs and route directly as well.
-    if (mapping?.provider === 'byteplus' && (mapping.endpointEnv || params.model.startsWith('ep-'))) {
+    const hasDirectOnlyAsset = operation === 'video'
+      && isTrustedAssetRequest(params)
+      && isDirectBytePlusSeedance(params.model, env);
+    if (mapping?.provider === 'byteplus' && (mapping.endpointEnv || params.model.startsWith('ep-') || hasDirectOnlyAsset)) {
       if (!directConfigured(env, 'byteplus')) throw createDirectProviderUnavailableError(params.model, 'byteplus');
       const adapter = directAdapter(env, 'byteplus', operation, fetchImpl);
       const directModel = resolveDirectProviderModel(mapping, env);

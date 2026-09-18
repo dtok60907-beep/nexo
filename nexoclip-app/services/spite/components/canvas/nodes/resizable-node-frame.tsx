@@ -31,6 +31,8 @@ type ResizableNodeFrameProps = {
   bounds: NodeSizeBounds
   defaultSize: NodeSize
   className?: string
+  claimLock?: () => Promise<boolean>
+  releaseLock?: () => void
   children: ReactNode
 }
 
@@ -40,6 +42,8 @@ export function ResizableNodeFrame({
   bounds,
   defaultSize,
   className,
+  claimLock,
+  releaseLock,
   children,
 }: ResizableNodeFrameProps) {
   const { patchNodeData } = useCanvasCollaboration()
@@ -57,9 +61,10 @@ export function ResizableNodeFrame({
     setSize(sizeFromData)
   }, [data.height, data.width, defaultSize.height, defaultSize.width, maxHeight, maxWidth, minHeight, minWidth])
 
-  const startResize = (event: PointerEvent<HTMLDivElement>) => {
+  const startResize = async (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     event.stopPropagation()
+    if (claimLock && !(await claimLock())) return
     resizeRef.current = createResizeSession(event.pointerId, event.clientX, event.clientY, sizeRef.current)
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -84,6 +89,7 @@ export function ResizableNodeFrame({
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     patchNodeData(nodeId, sizeRef.current)
+    releaseLock?.()
   }
 
   const cancelResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -93,10 +99,14 @@ export function ResizableNodeFrame({
     resizeRef.current = finalization.session
     sizeRef.current = finalization.size
     setSize(finalization.size)
+    releaseLock?.()
   }
 
   return (
-    <div className={`relative group ${className ?? ''}`} style={size}>
+    <div
+      className={`relative group ${className ?? ''}`}
+      style={size}
+    >
       {children}
       <div
         aria-label="Resize node"

@@ -5,6 +5,7 @@ import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   assetNotFoundResponse,
   countOwnedGenerationAssetsForProject,
+  deleteEmptyAssetFolders,
   folderNotFoundResponse,
   unauthorizedResponse,
   userOwnsFolder,
@@ -50,7 +51,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
         }
 
         const items = await sql`
-          SELECT i.asset_id, g.r2_url, g.type AS asset_type, g.prompt
+          SELECT i.asset_id, i.workspace_asset_id, g.r2_url, g.type AS asset_type, g.prompt
           FROM asset_folder_items i
           LEFT JOIN generation_history g ON g.id = i.asset_id
           WHERE i.folder_id = ${folderId}
@@ -61,6 +62,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           ...folders[0],
           assets: items.map(r => ({
             id: r.asset_id,
+            workspaceAssetId: r.workspace_asset_id ?? undefined,
             r2_url: r.r2_url,
             type: r.asset_type,
             prompt: r.prompt,
@@ -90,7 +92,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           return folderNotFoundResponse()
         }
 
-        const { name, description, addAssetIds, removeAssetIds, setAssetIds } = await request.json()
+        const { name, description, addAssetIds, removeAssetIds, setAssetIds, workspaceAssetIds = {} } = await request.json()
 
         const folders = await sql`
           SELECT project_id FROM asset_folders WHERE id = ${folderId} LIMIT 1
@@ -132,9 +134,10 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           for (const assetId of normalizedSetAssetIds) {
             if (!assetId) continue
             await sql`
-              INSERT INTO asset_folder_items (folder_id, asset_id)
-              VALUES (${folderId}, ${assetId})
-              ON CONFLICT (folder_id, asset_id) DO NOTHING
+              INSERT INTO asset_folder_items (folder_id, asset_id, workspace_asset_id)
+              VALUES (${folderId}, ${assetId}, ${typeof workspaceAssetIds[assetId] === 'string' ? workspaceAssetIds[assetId] : null})
+              ON CONFLICT (folder_id, asset_id) DO UPDATE
+              SET workspace_asset_id = COALESCE(EXCLUDED.workspace_asset_id, asset_folder_items.workspace_asset_id)
             `
             await sql`
               UPDATE generation_history
@@ -147,9 +150,10 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
             for (const assetId of normalizedAddAssetIds) {
               if (!assetId) continue
               await sql`
-                INSERT INTO asset_folder_items (folder_id, asset_id)
-                VALUES (${folderId}, ${assetId})
-                ON CONFLICT (folder_id, asset_id) DO NOTHING
+                INSERT INTO asset_folder_items (folder_id, asset_id, workspace_asset_id)
+                VALUES (${folderId}, ${assetId}, ${typeof workspaceAssetIds[assetId] === 'string' ? workspaceAssetIds[assetId] : null})
+                ON CONFLICT (folder_id, asset_id) DO UPDATE
+                SET workspace_asset_id = COALESCE(EXCLUDED.workspace_asset_id, asset_folder_items.workspace_asset_id)
               `
               await sql`
                 UPDATE generation_history
@@ -167,7 +171,13 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           }
         }
 
-        return NextResponse.json({ success: true })
+        const shouldDeleteIfEmpty = Array.isArray(setAssetIds)
+          || (Array.isArray(removeAssetIds) && removeAssetIds.length > 0)
+        const deleted = shouldDeleteIfEmpty
+          ? await deleteEmptyAssetFolders(sql, [folderId]) > 0
+          : false
+
+        return NextResponse.json({ success: true, deleted })
       } catch (err: any) {
         console.error('[folders] PATCH error:', err)
         return NextResponse.json(

@@ -27,18 +27,24 @@ export function mentionStateKey(text: string, mentions: PersistedMention[]): str
 
 export function shouldApplyRemoteMentionState({
   editing,
+  pendingLocalStateKey,
   localText,
   localMentions,
   incomingText,
   incomingMentions,
 }: {
   editing: boolean
+  pendingLocalStateKey?: string | null
   localText: string
   localMentions: PersistedMention[]
   incomingText: string
   incomingMentions: PersistedMention[]
 }): boolean {
   if (!editing) return true
+  if (
+    pendingLocalStateKey
+    && mentionStateKey(incomingText, incomingMentions) !== pendingLocalStateKey
+  ) return false
   if (localText !== incomingText) return false
   return mentionStateKey(localText, localMentions) !== mentionStateKey(incomingText, incomingMentions)
 }

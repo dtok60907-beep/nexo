@@ -13,11 +13,33 @@ function compile(type: FolderType) {
     [{ folderId: `${type}-folder`, name, selectedAssetIds: [`${type}-asset`] }],
     [{
       id: `${type}-folder`, name, type,
-      assets: [{ id: `${type}-asset`, r2_url: `/spite/api/r2-image/${type}.png` }],
+      assets: [{ id: `${type}-asset`, workspaceAssetId: `workspace-${type}-asset`, r2_url: `/spite/api/r2-image/${type}.png` }],
     }],
     model,
   )
 }
+
+test('mentions resolve through canonical workspace asset IDs rather than legacy R2 URLs', () => {
+  const result = compileMentionsForModel(
+    '@Nathan walks into frame',
+    [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['legacy-nathan'], selectedWorkspaceAssetIds: ['workspace-nathan'] }],
+    [{ id: 'nathan', name: 'Nathan', type: 'character', assets: [{ id: 'legacy-nathan', workspaceAssetId: 'workspace-nathan', r2_url: '/spite/api/r2-image/nathan.png' }] }],
+    model,
+  )
+  assert.deepEqual(result.refGroups[0].urls, ['/api/assets/workspace-nathan/download'])
+  assert.deepEqual(result.refGroups[0].workspaceAssetIds, ['workspace-nathan'])
+})
+
+test('legacy-only mentions report the folder that needs canonical import', () => {
+  const result = compileMentionsForModel(
+    '@Buratna walks into frame',
+    [{ folderId: 'buratna', name: 'Buratna', selectedAssetIds: ['legacy-buratna'] }],
+    [{ id: 'buratna', name: 'Buratna', type: 'character', assets: [{ id: 'legacy-buratna', r2_url: '/spite/api/r2-image/buratna.png' }] }],
+    model,
+  )
+  assert.deepEqual(result.needsCanonicalImport, ['Buratna'])
+  assert.deepEqual(result.refGroups, [])
+})
 
 test('character mentions demand the exact same identity', () => {
   const result = compile('character')
@@ -50,26 +72,26 @@ test('multiple mentions preserve every reference group and slot order', () => {
       {
         id: 'character-folder', name: 'Nathan', type: 'character',
         assets: [
-          { id: 'face-front', r2_url: '/spite/api/r2-image/face-front.png' },
-          { id: 'face-side', r2_url: '/spite/api/r2-image/face-side.png' },
+          { id: 'face-front', workspaceAssetId: 'workspace-face-front', r2_url: '/spite/api/r2-image/face-front.png' },
+          { id: 'face-side', workspaceAssetId: 'workspace-face-side', r2_url: '/spite/api/r2-image/face-side.png' },
         ],
       },
       {
         id: 'prop-folder', name: 'Hero Sword', type: 'prop',
-        assets: [{ id: 'sword', r2_url: '/spite/api/r2-image/sword.png' }],
+        assets: [{ id: 'sword', workspaceAssetId: 'workspace-sword', r2_url: '/spite/api/r2-image/sword.png' }],
       },
       {
         id: 'location-folder', name: 'Jakarta Studio', type: 'location',
-        assets: [{ id: 'studio', r2_url: '/spite/api/r2-image/studio.png' }],
+        assets: [{ id: 'studio', workspaceAssetId: 'workspace-studio', r2_url: '/spite/api/r2-image/studio.png' }],
       },
     ],
     model,
   )
 
   assert.deepEqual(result.refGroups.map((group) => group.urls), [
-    ['/spite/api/r2-image/face-front.png', '/spite/api/r2-image/face-side.png'],
-    ['/spite/api/r2-image/sword.png'],
-    ['/spite/api/r2-image/studio.png'],
+    ['/api/assets/workspace-face-front/download', '/api/assets/workspace-face-side/download'],
+    ['/api/assets/workspace-sword/download'],
+    ['/api/assets/workspace-studio/download'],
   ])
   assert.match(result.prompt, /reference images 1-2/)
   assert.match(result.prompt, /reference image 3/)

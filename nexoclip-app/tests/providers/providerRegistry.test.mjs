@@ -4,6 +4,7 @@ import {
   getDirectProvider,
   resolveDirectProviderModel,
   createBytePlusEndpointNotConfiguredError,
+  isDirectBytePlusSeedance,
   isRetryableProviderError,
   createDirectProviderUnavailableError,
 } from '../../src/providers/providerRegistry.js';
@@ -59,4 +60,14 @@ test('keeps standard BytePlus models on base model ids', () => {
   const mapping = getDirectProvider('dreamina-seedance-2-0-260128');
   assert.equal(mapping.endpointEnv, undefined);
   assert.equal(resolveDirectProviderModel(mapping, {}), 'dreamina-seedance-2-0-260128');
+});
+
+test('classifies only registered Seedance models and configured aliases', () => {
+  assert.equal(isDirectBytePlusSeedance('bytedance/seedance-2.5', {}), true);
+  assert.equal(isDirectBytePlusSeedance('ep-20260904190604-p8pjl', {}), true);
+  assert.equal(isDirectBytePlusSeedance('byteplus/seedance-2.5-unfiltered', {
+    BYTEPLUS_SEEDANCE_2_5_ENDPOINT: 'ep-private',
+  }), true);
+  assert.equal(isDirectBytePlusSeedance('byteplus/seedance-future', {}), false);
+  assert.equal(isDirectBytePlusSeedance('byteplus/not-a-registered-model', {}), false);
 });

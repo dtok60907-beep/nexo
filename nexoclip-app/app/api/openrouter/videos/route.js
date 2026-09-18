@@ -18,6 +18,13 @@ export function createVideoSubmitHandler({
     if (!body?.model || !body?.prompt) {
       return Response.json({ error: 'model and prompt are required' }, { status: 400 });
     }
+    const references = [
+      ...(body.input_references || []).map((item) => item?.image_url?.url),
+      ...(body.frame_images || []).map((item) => item?.image_url?.url ?? item?.url),
+    ];
+    if (references.some((value) => typeof value === 'string' && /^\s*asset:\/\//i.test(value))) {
+      return Response.json({ error: 'Invalid asset reference', code: 'INVALID_REFERENCE_IMAGE' }, { status: 400 });
+    }
 
     let tenant;
     try {

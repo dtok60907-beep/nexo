@@ -478,8 +478,12 @@ function patchNodeRecord(doc: Y.Doc, nodeId: string, patch: NodePatch): void {
 
   if (patch.data !== undefined) {
     const nextData = ensureRecord(patch.data)
-    if (!jsonEqual(ensureRecord(existing.get('data')), nextData)) {
-      existing.set('data', nextData)
+    const data = ensureDataMap(existing)
+    for (const key of Array.from(data.keys())) {
+      if (!(key in nextData)) data.delete(key)
+    }
+    for (const [key, value] of Object.entries(nextData)) {
+      setDataValue(data, key, value)
     }
   }
 
@@ -512,15 +516,14 @@ function updateNodeDataRecord(doc: Y.Doc, nodeId: string, updater: NodeDataUpdat
   const existing = nodes.get(nodeId)
   if (!(existing instanceof Y.Map)) return
 
-  const currentData = ensureRecord(existing.get('data'))
+  const currentData = readDataRecord(existing)
   const nextData = ensureRecord(updater({ ...currentData }))
-  for (const key of Object.keys(nextData)) {
-    if (nextData[key] === undefined) {
-      delete nextData[key]
-    }
+  const data = ensureDataMap(existing)
+  for (const key of Object.keys(currentData)) {
+    if (!(key in nextData) || nextData[key] === undefined) data.delete(key)
   }
-  if (!jsonEqual(currentData, nextData)) {
-    existing.set('data', nextData)
+  for (const [key, value] of Object.entries(nextData)) {
+    if (value !== undefined) setDataValue(data, key, value)
   }
 }
 
@@ -529,12 +532,12 @@ function replaceShotRecord(doc: Y.Doc, nodeId: string, shotId: string): void {
   const self = nodes.get(nodeId)
   if (!(self instanceof Y.Map)) return
 
-  const selfData = ensureRecord(self.get('data'))
+  const selfData = readDataRecord(self)
   const sceneId = typeof selfData.sceneId === 'string' ? selfData.sceneId : undefined
 
   for (const [currentNodeId, node] of nodes.entries()) {
     if (!(node instanceof Y.Map)) continue
-    const data = ensureRecord(node.get('data'))
+    const data = readDataRecord(node)
     const sameScene = !sceneId || data.sceneId === sceneId
     const currentShotId = (data.shotId || data.selectedShotId) as string | undefined
     if (currentNodeId === nodeId) {
@@ -557,13 +560,13 @@ function createNextShotRecord(doc: Y.Doc, nodeId: string): string | null {
   const self = nodes.get(nodeId)
   if (!(self instanceof Y.Map)) return null
 
-  const selfData = ensureRecord(self.get('data'))
+  const selfData = readDataRecord(self)
   const sceneId = typeof selfData.sceneId === 'string' ? selfData.sceneId : undefined
   let maxNum = 0
 
   for (const node of nodes.values()) {
     if (!(node instanceof Y.Map)) continue
-    const data = ensureRecord(node.get('data'))
+    const data = readDataRecord(node)
     if (sceneId && data.sceneId !== sceneId) continue
     const match = String(data.shotId || data.selectedShotId || '').match(/^shot-(\d+)$/)
     if (match) {
@@ -706,7 +709,7 @@ function buildNodeMap(node: NodeInput): Y.Map<unknown> {
   }
   map.set('positionX', asNumber(normalized.position?.x))
   map.set('positionY', asNumber(normalized.position?.y))
-  map.set('data', ensureRecord(normalized.data))
+  map.set('data', createDataMap(normalized.data))
 
   for (const [key, value] of Object.entries(normalized)) {
     if (key === 'id' || key === 'type' || key === 'position' || key === 'data') {
@@ -724,7 +727,7 @@ function buildEdgeMap(edge: EdgeInput): Y.Map<unknown> {
   map.set('id', normalized.id)
   map.set('source', normalized.source)
   map.set('target', normalized.target)
-  map.set('data', ensureRecord(normalized.data))
+  map.set('data', createDataMap(normalized.data))
 
   if (normalized.sourceHandle !== undefined) {
     map.set('sourceHandle', normalized.sourceHandle)
@@ -764,29 +767,91 @@ function setOrDelete(map: Y.Map<unknown>, key: string, value: unknown): void {
   }
 }
 
+function ensureDataMap(node: Y.Map<unknown>): Y.Map<unknown> {
+  const current = node.get('data')
+  if (current instanceof Y.Map) return current
+
+  const data = createDataMap(current)
+  node.set('data', data)
+  return data
+}
+
+function readDataRecord(node: Y.Map<unknown>): JsonRecord {
+  const data = node.get('data')
+  if (data instanceof Y.Map) {
+    return Object.fromEntries(Array.from(data.entries()).map(([key, value]) => [key, cloneYValue(value)]))
+  }
+  return ensureRecord(data)
+}
+
+function createDataMap(value: unknown): Y.Map<unknown> {
+  const data = new Y.Map<unknown>()
+  for (const [key, item] of Object.entries(ensureRecord(value))) {
+    data.set(key, toYDataValue(key, item))
+  }
+  return data
+}
+
+function cloneYValue(value: unknown): unknown {
+  if (value instanceof Y.Text) return value.toString()
+  if (value instanceof Y.Map) {
+    return Object.fromEntries(Array.from(value.entries()).map(([key, item]) => [key, cloneYValue(item)]))
+  }
+  if (value instanceof Y.Array) return value.toArray().map(cloneYValue)
+  return value
+}
+
+function setDataValue(data: Y.Map<unknown>, key: string, value: unknown): void {
+  if (key === 'text' && typeof value === 'string') {
+    const current = data.get(key)
+    const text = current instanceof Y.Text ? current : new Y.Text(typeof current === 'string' ? current : '')
+    if (!(current instanceof Y.Text)) data.set(key, text)
+    replaceYText(text, value)
+    return
+  }
+  if (key === 'mentions' && Array.isArray(value)) {
+    const current = data.get(key)
+    const mentions = current instanceof Y.Array ? current : new Y.Array<unknown>()
+    if (!(current instanceof Y.Array)) {
+      const prior = Array.isArray(current) ? current : []
+      if (prior.length) mentions.insert(0, prior)
+      data.set(key, mentions)
+    }
+    mentions.delete(0, mentions.length)
+    if (value.length) mentions.insert(0, value)
+    return
+  }
+  setOrDelete(data, key, value)
+}
+
+function toYDataValue(key: string, value: unknown): unknown {
+  if (key === 'text' && typeof value === 'string') return new Y.Text(value)
+  if (key === 'mentions' && Array.isArray(value)) {
+    const mentions = new Y.Array<unknown>()
+    if (value.length) mentions.insert(0, value)
+    return mentions
+  }
+  return value
+}
+
+function replaceYText(text: Y.Text, next: string): void {
+  const current = text.toString()
+  if (current === next) return
+  let start = 0
+  while (start < current.length && start < next.length && current[start] === next[start]) start += 1
+  let end = 0
+  while (end < current.length - start && end < next.length - start && current[current.length - 1 - end] === next[next.length - 1 - end]) end += 1
+  const deleteCount = current.length - start - end
+  if (deleteCount > 0) text.delete(start, deleteCount)
+  const insert = next.slice(start, next.length - end)
+  if (insert) text.insert(start, insert)
+}
+
 function ensureRecord(value: unknown): JsonRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {}
   }
   return { ...(value as JsonRecord) }
-}
-
-function jsonEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true
-  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) {
-    return false
-  }
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) &&
-      left.length === right.length && left.every((value, index) => jsonEqual(value, right[index]))
-  }
-
-  const leftRecord = left as JsonRecord
-  const rightRecord = right as JsonRecord
-  const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined)
-  const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined)
-  return leftKeys.length === rightKeys.length &&
-    leftKeys.every((key) => Object.hasOwn(rightRecord, key) && jsonEqual(leftRecord[key], rightRecord[key]))
 }
 
 function isPosition(value: unknown): value is Position {

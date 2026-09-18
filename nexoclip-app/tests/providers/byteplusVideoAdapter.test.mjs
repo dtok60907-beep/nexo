@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBytePlusAdapter } from '../../src/providers/direct/byteplusAdapter.js';
-import { createProviderRouter } from '../../src/providers/providerRouter.js';
+import { createProviderRouter, markTrustedAssetRequest } from '../../src/providers/providerRouter.js';
 
 function jsonResponse(body, { status = 200 } = {}) {
   return { ok: status >= 200 && status < 300, status, headers: { get: () => 'application/json' }, json: async () => body };
@@ -26,6 +26,36 @@ test('sends a BytePlus Seedance deployment endpoint directly', async () => {
   assert.equal(bytePlusBody.duration, 10);
   assert.equal(calls.length, 1);
   assert.match(calls[0], /ark\.example\/api\/v3\/contents\/generations\/tasks/);
+});
+
+test('routes registered Seedance with trusted assets directly without calling OpenRouter', async () => {
+  const calls = [];
+  let bytePlusBody;
+  const router = createProviderRouter({
+    env: { OPENROUTER_API_KEY: 'or-key', BYTEPLUS_API_KEY: 'bp-key', BYTEPLUS_BASE_URL: 'https://ark.example/api/v3' },
+    fetch: async (url, options) => {
+      calls.push(url);
+      if (url.includes('openrouter.ai')) throw new Error('trusted asset reached OpenRouter');
+      bytePlusBody = JSON.parse(options.body);
+      return jsonResponse({ id: 'cgt-1', status: 'queued' });
+    },
+  });
+
+  const result = await router.submitVideo(markTrustedAssetRequest({
+    model: 'bytedance/seedance-2.5',
+    prompt: 'a cat running',
+    referenceImages: ['asset://trusted-reference'],
+    frameImages: [{ image_url: { url: 'asset://trusted-frame' }, frame_type: 'first_frame' }],
+  }));
+
+  assert.equal(result.provider, 'byteplus');
+  assert.equal(bytePlusBody.model, 'dreamina-seedance-2-5-260628');
+  assert.deepEqual(bytePlusBody.content.filter((part) => part.type === 'image_url').map((part) => part.image_url.url), [
+    'asset://trusted-reference',
+    'asset://trusted-frame',
+  ]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /ark\.example/);
 });
 
 test('falls back to BytePlus Seedance 2.5 when OpenRouter returns a generic 400', async () => {
@@ -90,6 +120,50 @@ test('submit converts frame images to BytePlus reference images', async () => {
     { type: 'image_url', role: 'reference_image', image_url: { url: 'https://cdn.example/start.jpg' } },
   );
   assert.equal(body.duration, 5);
+});
+
+test('submit appends frame images after reference images without changing reference indices', async () => {
+  let request;
+  const adapter = createBytePlusAdapter({
+    apiKey: 'secret', baseUrl: 'https://ark.example/api/v3',
+    fetch: async (url, options) => { request = { url, options }; return jsonResponse({ id: 'cgt-1' }); },
+  });
+
+  await adapter.submit({
+    model: 'dreamina-seedance-2-0-mini-260615',
+    prompt: 'animate mixed inputs',
+    referenceImages: ['asset://reference-zero', 'https://cdn.example/reference-one.jpg'],
+    frameImages: [
+      { image_url: { url: 'asset://frame-zero' }, frame_type: 'first_frame' },
+      { image_url: { url: 'https://cdn.example/frame-one.jpg' }, frame_type: 'last_frame' },
+    ],
+  });
+
+  const body = JSON.parse(request.options.body);
+  assert.deepEqual(
+    body.content.filter((part) => part.type === 'image_url').map((part) => part.image_url.url),
+    ['asset://reference-zero', 'https://cdn.example/reference-one.jpg', 'asset://frame-zero', 'https://cdn.example/frame-one.jpg'],
+  );
+});
+
+test('submit preserves trusted asset URIs and reference image ordering', async () => {
+  let request;
+  const adapter = createBytePlusAdapter({
+    apiKey: 'secret', baseUrl: 'https://ark.example/api/v3',
+    fetch: async (url, options) => { request = { url, options }; return jsonResponse({ id: 'cgt-1' }); },
+  });
+
+  await adapter.submit({
+    model: 'dreamina-seedance-2-0-mini-260615',
+    prompt: 'animate in order',
+    referenceImages: ['asset://provider-first', 'data:image/png;base64,c2Vjb25k', 'asset://provider-third'],
+  });
+
+  const body = JSON.parse(request.options.body);
+  assert.deepEqual(
+    body.content.filter((part) => part.type === 'image_url').map((part) => part.image_url.url),
+    ['asset://provider-first', 'data:image/png;base64,c2Vjb25k', 'asset://provider-third'],
+  );
 });
 
 test('submit sends reference images with the reference_image role BytePlus requires', async () => {

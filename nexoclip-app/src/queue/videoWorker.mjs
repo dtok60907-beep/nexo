@@ -4,6 +4,7 @@ import IORedis from 'ioredis';
 import { getPool, closePool } from '../db/pool.js';
 import { createReferenceStorage, createStorage } from '../services/assetService.js';
 import { createDefaultSaasVideoHandler } from '../services/saasVideoGeneration.js';
+import { findBytePlusAssetLink } from '../repositories/byteplusAssetRepository.js';
 import { persistGenerationResult } from '../services/generationOutputService.js';
 import { createBullMqGenerationQueue } from './bullmqGenerationQueue.js';
 import { recoverQueuedGenerations, generationQueueName } from './generationQueue.js';
@@ -23,6 +24,7 @@ export async function createVideoWorker({
   recover = recoverQueuedGenerations, recoverUnreserved = recoverUnreservedGenerations,
   persistResult = persistGenerationResult, createStorage: loadStorage = createStorage,
   createReferenceStorage: loadReferenceStorage = createReferenceStorage,
+  findBytePlusAssetLink: findAssetLink = findBytePlusAssetLink,
   schedule = globalThis.setInterval, clearSchedule = globalThis.clearInterval, onError = console.error,
 } = {}) {
   const config = videoWorkerConfig(env);
@@ -36,7 +38,7 @@ export async function createVideoWorker({
   const storage = loadStorage(env);
   const processor = createGenerationProcessor({
     pool,
-    handler: createHandler({ pool, storage, referenceStorage: loadReferenceStorage(env, storage) }),
+    handler: createHandler({ pool, storage, referenceStorage: loadReferenceStorage(env, storage), findBytePlusAssetLink: findAssetLink, env }),
     provider: 'openrouter', persistResult, onError,
   });
   const worker = queue.createWorker(processor, { concurrency: config.concurrency });

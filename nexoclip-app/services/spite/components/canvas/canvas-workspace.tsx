@@ -318,6 +318,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const presenceControllerRef = useRef<ReturnType<typeof createPresenceController> | null>(null)
   const selectedSceneNodeIdsRef = useRef<string[]>([])
+  const lockedNodeIdsRef = useRef<Set<string>>(new Set())
   const [presenceNow, setPresenceNow] = useState(() => Date.now())
   // Connector-animation preference (Settings → Performance). Read on mount and
   // kept live via the broadcast event so toggling it reflects without reload.
@@ -524,6 +525,10 @@ function CanvasInner({ projectId }: { projectId: string }) {
 
   const onConnect = useCallback((params: Connection) => {
     if (!allowDocumentMutation) {
+      return
+    }
+    if ((params.source && lockedNodeIdsRef.current.has(params.source)) || (params.target && lockedNodeIdsRef.current.has(params.target))) {
+      toast.error('This node is being edited by another collaborator')
       return
     }
 
@@ -750,8 +755,11 @@ function CanvasInner({ projectId }: { projectId: string }) {
 
   const deleteSelected = useCallback(() => {
     if (!allowDocumentMutation) return
-    const selectedIds = new Set(selectedNodeIds)
-    if (selectedIds.size === 0) return
+    const selectedIds = new Set(selectedNodeIds.filter((nodeId) => !lockedNodeIdsRef.current.has(nodeId)))
+    if (selectedIds.size === 0) {
+      if (selectedNodeIds.length > 0) toast.error('This node is being edited by another collaborator')
+      return
+    }
 
     const toDelete = allNodes.filter((node) => selectedIds.has(node.id))
     commands.batch(({ deleteNode }) => {
@@ -1005,9 +1013,11 @@ function CanvasInner({ projectId }: { projectId: string }) {
   const lockedNodeMembershipKey = useMemo(() => {
     const locks = new Set<string>()
     for (const peer of remotePresence) {
-      if (peer.lock?.nodeId) {
-        locks.add(peer.lock.nodeId)
-      }
+      // Drag locks and focused editors are both exclusive node ownership
+      // signals. Awareness gives peers immediate UI blocking; the server
+      // lease still resolves races when a mutation is claimed.
+      if (peer.lock?.nodeId) locks.add(peer.lock.nodeId)
+      if (peer.editing?.nodeId) locks.add(peer.editing.nodeId)
     }
     return Array.from(locks).sort().join('\u0000')
   }, [remotePresence])
@@ -1015,6 +1025,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
     () => new Set(lockedNodeMembershipKey ? lockedNodeMembershipKey.split('\u0000') : []),
     [lockedNodeMembershipKey],
   )
+  lockedNodeIdsRef.current = lockedNodeIds
 
   const onNodeDrag = useCallback((_event: any, node: Node) => {
     const others = (nodes as Node[]).filter(n => n.id !== node.id)
@@ -1068,6 +1079,12 @@ function CanvasInner({ projectId }: { projectId: string }) {
       return {
         ...nextNode,
         draggable: false,
+        selectable: false,
+        connectable: false,
+        deletable: false,
+        // React Flow-level interaction and every nested toolbar/control are
+        // blocked for a remote owner. Realtime document updates still render.
+        style: { ...node.style, pointerEvents: 'none' as const },
         className: `${node.className ?? ''} ring-2 ring-amber-400/70 ring-offset-1 ring-offset-[#080A0C]`,
       }
     })
@@ -1260,11 +1277,18 @@ function CanvasInner({ projectId }: { projectId: string }) {
               onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
-              onNodeClick={() => {
-                // Close any open sticker pickers when clicking any node
+              onNodeClick={(_event, node) => {
+                // Ownership begins before toolbars/settings can be opened.
+                // Peers see it through awareness and their wrapper becomes
+                // pointer-events:none; server lease remains the mutation gate.
+                presenceControllerRef.current?.startDragLock(node.id)
+                window.dispatchEvent(new CustomEvent('canvas-node-active', { detail: node.id }))
                 window.dispatchEvent(new Event('closeStickerPickers'))
               }}
               onPaneClick={(e) => {
+                // Leaving a node releases its transient interaction lock.
+                presenceControllerRef.current?.stopDragLock()
+                window.dispatchEvent(new CustomEvent('canvas-node-active', { detail: null }))
                 // Always close any open sticker pickers
                 window.dispatchEvent(new Event('closeStickerPickers'))
 

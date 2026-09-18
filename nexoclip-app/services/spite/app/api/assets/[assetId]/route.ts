@@ -5,6 +5,7 @@ import { getDb } from '@/lib/db'
 import { getAuthenticatedUser } from '@/lib/main-session'
 import {
   assetNotFoundResponse,
+  deleteEmptyAssetFolders,
   findOwnedGenerationAsset,
   unauthorizedResponse,
   userOwnsProject,
@@ -80,9 +81,10 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
         if (!asset) return assetNotFoundResponse()
 
         const body = await request.json()
-        const { used_in_canvas, recovered } = body as {
+        const { used_in_canvas, recovered, canonical_url } = body as {
           used_in_canvas?: boolean
           recovered?: boolean
+          canonical_url?: string
         }
 
         if (used_in_canvas !== undefined) {
@@ -100,6 +102,29 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           await sql`
             UPDATE generation_history
             SET recovered = ${recovered}
+            WHERE id = ${assetId} AND project_id = ${asset.project_id}
+          `
+        }
+
+        if (canonical_url !== undefined) {
+          const parsed = new URL(canonical_url, 'https://canvas.invalid')
+          const canonicalPath = /^\/api\/assets\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/download$/i.test(parsed.pathname)
+          const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')
+          if (!canonicalPath || !baseUrl) {
+            return NextResponse.json({ error: 'Invalid workspace asset URL' }, { status: 400 })
+          }
+          const upstream = await fetchFn(`${baseUrl}${parsed.pathname}${parsed.search}`, {
+            headers: { cookie: request.headers.get('cookie') ?? '' },
+          })
+          const isOwnedImage = upstream.ok && upstream.headers.get('content-type')?.startsWith('image/')
+          await upstream.body?.cancel()
+          if (!isOwnedImage) {
+            return NextResponse.json({ error: 'Workspace image not found' }, { status: 404 })
+          }
+          const storedUrl = `${parsed.pathname}${parsed.search}`
+          await sql`
+            UPDATE generation_history
+            SET r2_url = ${storedUrl}
             WHERE id = ${assetId} AND project_id = ${asset.project_id}
           `
         }
@@ -144,7 +169,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             headers: { cookie: request.headers.get('cookie') ?? '' },
           })
           if (upstream.ok) {
-            await sql`
+            const removedRows = await sql`
               DELETE FROM asset_folder_items
               WHERE asset_id = ${assetId}
                 AND folder_id IN (
@@ -152,7 +177,9 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
                   JOIN projects p ON p.id = f.project_id
                   WHERE p.userid = ${user.id}
                 )
-            `
+              RETURNING folder_id
+            ` as Array<{ folder_id: string }>
+            await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
           }
           return new NextResponse(await upstream.text(), {
             status: upstream.status,
@@ -165,6 +192,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           RETURNING folder_id
         ` as { folder_id: string }[]
         const removedFromFolders = removedRows.length
+        const deletedFolders = await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
 
         const projectionSequence = await sql`
           SELECT durable_seq, projected_seq
@@ -217,6 +245,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             kept: true,
             reason: 'still_on_canvas',
             removed_from_folders: removedFromFolders,
+            deleted_folders: deletedFolders,
           })
         }
 
@@ -240,6 +269,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
           success: true,
           kept: false,
           removed_from_folders: removedFromFolders,
+          deleted_folders: deletedFolders,
         })
       } catch (error: any) {
         console.error('[assets] Delete error:', error)

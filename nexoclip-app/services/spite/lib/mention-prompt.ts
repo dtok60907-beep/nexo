@@ -6,13 +6,14 @@ interface MentionInput {
   folderId: string
   name: string
   selectedAssetIds: string[]
+  selectedWorkspaceAssetIds?: string[]
 }
 
 interface FolderInput {
   id: string
   name: string
   type: FolderType
-  assets: { id: string; r2_url: string }[]
+  assets: { id: string; workspaceAssetId?: string; r2_url: string }[]
 }
 
 // One logical "subject" worth of reference images. For folder mentions
@@ -22,6 +23,7 @@ interface FolderInput {
 // element-based (Kling v3), and flattens them otherwise.
 export interface ReferenceGroup {
   urls: string[]
+  workspaceAssetIds: string[]
   folderName?: string
   folderType?: FolderType
 }
@@ -52,6 +54,7 @@ export interface CompiledMentions {
   prompt: string
   refGroups: ReferenceGroup[]
   strategy: RefStrategy
+  needsCanonicalImport: string[]
 }
 
 // Must match tagFromName in mention-textarea.tsx — collapses any run of
@@ -96,22 +99,28 @@ function collectGroups(
 ): {
   groupsByFolderId: Map<string, ReferenceGroup>
   orderedFolderIds: string[]
+  needsCanonicalImport: string[]
 } {
   const groupsByFolderId = new Map<string, ReferenceGroup>()
+  const needsCanonicalImport = new Set<string>()
   const orderedFolderIds: string[] = []
   const seen = new Set<string>()
 
-  const consider = (folder: FolderInput, selectedIds?: string[]) => {
+  const consider = (folder: FolderInput, selectedIds?: string[], selectedWorkspaceIds?: string[]) => {
     if (seen.has(folder.id)) return
     const useAll = !selectedIds || selectedIds.length === 0
     const idSet = new Set(selectedIds || [])
-    const urls = folder.assets
-      .filter((a) => (useAll || idSet.has(a.id)) && !!a.r2_url)
-      .map((a) => a.r2_url)
+    const workspaceIdSet = new Set(selectedWorkspaceIds || [])
+    const requested = folder.assets
+      .filter((asset) => useAll || idSet.has(asset.id) || (asset.workspaceAssetId && workspaceIdSet.has(asset.workspaceAssetId)))
+    if (requested.some((asset) => !asset.workspaceAssetId)) needsCanonicalImport.add(folder.name)
+    const selected = requested.filter((asset) => !!asset.workspaceAssetId)
+    const urls = selected.map((asset) => `/api/assets/${encodeURIComponent(asset.workspaceAssetId!)}/download`)
     if (urls.length === 0) return
     seen.add(folder.id)
     groupsByFolderId.set(folder.id, {
       urls,
+      workspaceAssetIds: selected.map((asset) => asset.workspaceAssetId!),
       folderName: folder.name,
       folderType: folder.type,
     })
@@ -120,7 +129,7 @@ function collectGroups(
 
   for (const m of mentions) {
     const folder = folders.find((f) => f.id === m.folderId)
-    if (folder) consider(folder, m.selectedAssetIds)
+    if (folder) consider(folder, m.selectedAssetIds, m.selectedWorkspaceAssetIds)
   }
   const scanRe = /@([\w-]+)/g
   let scanMatch: RegExpExecArray | null
@@ -130,7 +139,7 @@ function collectGroups(
     if (folder) consider(folder)
   }
 
-  return { groupsByFolderId, orderedFolderIds }
+  return { groupsByFolderId, orderedFolderIds, needsCanonicalImport: [...needsCanonicalImport] }
 }
 
 // `prefixRefCount`: refs that precede folder mentions in the final
@@ -146,7 +155,7 @@ export function compileMentionsForModel(
   prefixRefCount = 0,
 ): CompiledMentions {
   const strategy = pickRefStrategy(model)
-  const { groupsByFolderId, orderedFolderIds } = collectGroups(prompt, mentions, folders)
+  const { groupsByFolderId, orderedFolderIds, needsCanonicalImport } = collectGroups(prompt, mentions, folders)
 
   // Pre-compute slot starts for citation-flat / multi (slot index = position
   // in the final flat URL array).
@@ -215,5 +224,5 @@ export function compileMentionsForModel(
     refGroups = orderedFolderIds.map((fid) => groupsByFolderId.get(fid)!)
   }
 
-  return { prompt: rewritten, refGroups, strategy }
+  return { prompt: rewritten, refGroups, strategy, needsCanonicalImport }
 }

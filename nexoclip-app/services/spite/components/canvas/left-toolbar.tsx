@@ -2,6 +2,18 @@
 
 import { withBasePath } from '@/lib/base-path'
 import { workspaceAssetDeleteUrl } from '@/lib/workspace-asset-delete'
+import {
+  applyBytePlusTrustState,
+  bytePlusTrustPollDelay,
+  importImageForTrust,
+  mergeAssetPreservingBytePlusTrust,
+  type BytePlusTrustState,
+  requestBytePlusTrust,
+  safeBytePlusTrustError,
+  shouldPollBytePlusTrust,
+  trustForSeedanceView,
+  workspaceAssetIdFromUrl,
+} from '@/lib/byteplus-trust'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import useSWR from 'swr'
@@ -93,6 +105,48 @@ interface GeneratedAsset {
   // generations that came back from a stuck / timed-out job.
   recovered?: boolean
   created_at: string
+  byteplus_trust?: BytePlusTrustState
+}
+
+function TrustForSeedance({
+  type,
+  state,
+  inFlight,
+  onTrust,
+}: {
+  type: GeneratedAsset['type']
+  state: BytePlusTrustState
+  inFlight: boolean
+  onTrust: () => void
+}) {
+  const view = trustForSeedanceView(type, state, inFlight)
+  if (!view) return null
+
+  return (
+    <div className="mt-4 rounded-lg border border-border/30 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs text-muted-foreground/60">Trust for Seedance</span>
+        <span className="text-xs text-foreground" role="status" aria-live="polite">
+          {view.label}
+        </span>
+      </div>
+      {view.message ? (
+        <p className="mt-2 text-xs text-red-300" role="alert">{view.message}</p>
+      ) : null}
+      {view.action ? (
+        <button
+          type="button"
+          onClick={onTrust}
+          disabled={view.disabled}
+          aria-label={view.action}
+          className="mt-3 w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-accent/20 text-accent text-xs hover:bg-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {inFlight || state.status === 'processing' ? <CircleNotch size={13} className="animate-spin" aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
+          {view.action}
+        </button>
+      ) : null}
+    </div>
+  )
 }
 
 interface LeftToolbarProps {
@@ -142,6 +196,9 @@ export function LeftToolbar({
   const [historyFilter, setHistoryFilter] = useState<'all' | 'image' | 'video' | 'audio' | 'uploads'>('all')
   const [historySearch, setHistorySearch] = useState('')
   const [selectedGenAsset, setSelectedGenAsset] = useState<GeneratedAsset | null>(null)
+  const trustRequestsRef = useRef(new Set<string>())
+  const [trustingAssetIds, setTrustingAssetIds] = useState<Set<string>>(new Set())
+  const [documentVisible, setDocumentVisible] = useState(true)
   // What the expanded panel's main area is showing. The sidebar drives this.
   type ExpandedView =
     | { kind: 'history' }
@@ -250,7 +307,7 @@ export function LeftToolbar({
         return d
       })
     },
-    { refreshInterval: 5000, revalidateOnFocus: true }
+    { revalidateOnFocus: true }
   )
 
   // Listen for folder changes — force network revalidate so we don't show
@@ -269,13 +326,123 @@ export function LeftToolbar({
   const propFolders = useMemo(() => folders.filter(f => f.type === 'prop'), [folders])
   const locationFolders = useMemo(() => folders.filter(f => f.type === 'location'), [folders])
   
+  useEffect(() => {
+    const updateVisibility = () => setDocumentVisible(!document.hidden)
+    updateVisibility()
+    document.addEventListener('visibilitychange', updateVisibility)
+    return () => document.removeEventListener('visibilitychange', updateVisibility)
+  }, [])
+
   // Keep selectedGenAsset in sync with latest data from SWR
   useEffect(() => {
-    if (selectedGenAsset) {
-      const updated = generatedAssets.find(a => a.id === selectedGenAsset.id)
-      if (updated) setSelectedGenAsset(updated)
-    }
+    setSelectedGenAsset(current => {
+      if (!current) return current
+      const updated = generatedAssets.find(asset => asset.id === current.id)
+      return updated ? mergeAssetPreservingBytePlusTrust(current, updated) : current
+    })
   }, [generatedAssets])
+
+  const setTrustState = (assetId: string, state: BytePlusTrustState, revalidate = false) => {
+    setSelectedGenAsset(current => current?.id === assetId
+      ? { ...current, byteplus_trust: state }
+      : current)
+    mutateAssets(current => applyBytePlusTrustState(current, assetId, state), { revalidate })
+  }
+
+  const trustSelectedAsset = async () => {
+    const asset = selectedGenAsset
+    if (!asset || asset.type !== 'image' || asset.byteplus_trust?.status === 'processing') return
+    if (trustRequestsRef.current.has(asset.id)) return
+
+    trustRequestsRef.current.add(asset.id)
+    setTrustingAssetIds(current => new Set(current).add(asset.id))
+    let state: BytePlusTrustState
+    try {
+      const imported = await importImageForTrust({
+        url: asset.r2_url,
+        filename: `${asset.prompt || 'canvas-image'}.png`,
+      })
+      setTrustState(asset.id, { status: 'processing' })
+      if (imported.canonicalUrl !== asset.r2_url) {
+        const linked = await fetch(withBasePath(`/api/assets/${encodeURIComponent(asset.id)}`), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ canonical_url: imported.canonicalUrl }),
+        })
+        if (!linked.ok) throw new Error('Could not link this workspace image')
+        setSelectedGenAsset(current => current?.id === asset.id
+          ? { ...current, r2_url: imported.canonicalUrl }
+          : current)
+        mutateFolders(current => current?.map(folder => ({
+          ...folder,
+          assets: folder.assets.map(item => item.id === asset.id
+            ? { ...item, r2_url: imported.canonicalUrl }
+            : item),
+        })), { revalidate: false })
+        mutateAssets()
+      }
+      state = await requestBytePlusTrust(imported.assetId, 'POST')
+    } catch {
+      state = { status: 'failed', error: { code: 'IMAGE_IMPORT_FAILED' } }
+    } finally {
+      trustRequestsRef.current.delete(asset.id)
+      setTrustingAssetIds(current => {
+        const next = new Set(current)
+        next.delete(asset.id)
+        return next
+      })
+    }
+    setTrustState(asset.id, state)
+    if (state.status === 'failed') toast.error(safeBytePlusTrustError(state.error))
+  }
+
+  useEffect(() => {
+    const asset = selectedGenAsset
+    const state = asset?.byteplus_trust ?? { status: 'not_trusted' as const }
+    if (!shouldPollBytePlusTrust({
+      documentVisible,
+      detailVisible: historyOpen && Boolean(asset),
+      type: asset?.type,
+      status: state.status,
+    })) return
+
+    const resolvedAssetId = workspaceAssetIdFromUrl(asset!.r2_url)
+    if (!resolvedAssetId) return
+    const providerAssetId = resolvedAssetId
+    const localAssetId = asset!.id
+    let cancelled = false
+    let attempt = 0
+    let timeout = window.setTimeout(poll, bytePlusTrustPollDelay(attempt))
+    async function poll() {
+      let next: BytePlusTrustState
+      try {
+        next = await requestBytePlusTrust(providerAssetId, 'GET')
+      } catch {
+        next = { status: 'failed' }
+      }
+      if (cancelled) return
+      setTrustState(localAssetId, next, next.status !== 'processing')
+      if (next.status === 'processing') {
+        attempt += 1
+        timeout = window.setTimeout(poll, bytePlusTrustPollDelay(attempt))
+      }
+    }
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+    }
+  }, [documentVisible, historyOpen, selectedGenAsset?.id, selectedGenAsset?.r2_url, selectedGenAsset?.type, selectedGenAsset?.byteplus_trust?.status, mutateAssets])
+
+  useEffect(() => {
+    const asset = selectedGenAsset
+    const workspaceAssetId = workspaceAssetIdFromUrl(asset?.r2_url)
+    if (!asset || asset.type !== 'image' || asset.byteplus_trust || !workspaceAssetId) return
+    let cancelled = false
+    requestBytePlusTrust(workspaceAssetId, 'GET')
+      .then(state => { if (!cancelled) setTrustState(asset.id, state) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [selectedGenAsset?.id, selectedGenAsset?.r2_url, selectedGenAsset?.type])
 
   // Listen for asset status changes (from canvas node deletion)
   useEffect(() => {
@@ -1067,7 +1234,16 @@ export function LeftToolbar({
                               tabIndex={0}
                               onClick={() => {
                                 if (selectMode) toggleAssetSelected(a.id)
-                                else if (full) setSelectedGenAsset(full)
+                                else setSelectedGenAsset(full || {
+                                  id: a.id,
+                                  type: a.type,
+                                  model: '',
+                                  prompt: a.prompt || '',
+                                  r2_url: a.r2_url,
+                                  used_in_canvas: true,
+                                  is_upload: false,
+                                  created_at: new Date().toISOString(),
+                                })
                               }}
                               draggable={!selectMode}
                               onDragStart={(e) => {
@@ -1253,6 +1429,13 @@ export function LeftToolbar({
                     </span>
                   </div>
                 </div>
+
+                <TrustForSeedance
+                  type={selectedGenAsset.type}
+                  state={selectedGenAsset.byteplus_trust ?? { status: 'not_trusted' }}
+                  inFlight={trustingAssetIds.has(selectedGenAsset.id)}
+                  onTrust={trustSelectedAsset}
+                />
 
                 {/* Prompt */}
                 <div className="mt-4">
@@ -1534,7 +1717,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (
@@ -1575,7 +1758,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (
@@ -1616,7 +1799,7 @@ export function LeftToolbar({
                               <div className="flex gap-1 mb-1.5">
                                 {folder.assets.slice(0, 2).map((asset, i) => (
                                   <div key={i} className="w-8 h-8 rounded bg-white/5 overflow-hidden">
-                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" />
+                                    <img src={asset.r2_url} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                                   </div>
                                 ))}
                                 {folder.assets.length === 0 && (
@@ -1750,7 +1933,14 @@ export function LeftToolbar({
                 </div>
               </div>
 
-              <div className="mb-4">
+              <TrustForSeedance
+                type={selectedGenAsset.type}
+                state={selectedGenAsset.byteplus_trust ?? { status: 'not_trusted' }}
+                inFlight={trustingAssetIds.has(selectedGenAsset.id)}
+                onTrust={trustSelectedAsset}
+              />
+
+              <div className="mb-4 mt-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-mono text-muted-foreground/60 uppercase">Prompt</span>
                   <button
