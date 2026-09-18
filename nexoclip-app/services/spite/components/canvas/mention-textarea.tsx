@@ -732,18 +732,25 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
               <div className="p-2">
                 <div className="grid grid-cols-4 gap-1.5 max-h-[260px] overflow-y-auto pr-0.5">
                   {folder.assets.map((asset) => {
-                    const isSel = selectedIds.has(asset.id)
+                    const needsImport = !asset.workspaceAssetId
+                    const isSel = !needsImport && selectedIds.has(asset.id)
                     return (
                       <button
                         type="button"
                         key={asset.id}
                         onClick={() => toggleAssetInChip(folder.id, asset.id, folder.assets)}
+                        disabled={needsImport}
                         className={`relative aspect-square rounded-md overflow-hidden border transition ${
-                          isSel ? 'border-accent ring-1 ring-accent/60' : 'border-white/10 hover:border-white/30 opacity-50 hover:opacity-100'
+                          needsImport ? 'border-amber-400/40 opacity-45 cursor-not-allowed' : isSel ? 'border-accent ring-1 ring-accent/60' : 'border-white/10 hover:border-white/30 opacity-50 hover:opacity-100'
                         }`}
-                        title={isSel ? 'Click to deselect' : 'Click to select'}
+                        title={needsImport ? 'Needs import into Assets before Seedance' : isSel ? 'Click to deselect' : 'Click to select'}
                       >
                         <AssetThumb url={asset.r2_url} type={asset.type} />
+                        {needsImport && (
+                          <div className="absolute inset-x-0 bottom-0 bg-amber-950/90 px-1 py-0.5 text-[8px] text-amber-200">
+                            Needs import
+                          </div>
+                        )}
                         {isSel && (
                           <div className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-accent flex items-center justify-center">
                             <Check size={9} weight="bold" className="text-white" />
