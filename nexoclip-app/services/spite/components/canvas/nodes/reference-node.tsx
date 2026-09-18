@@ -102,6 +102,8 @@ function ReferenceNodeImpl({ id, data, selected }: NodeProps) {
       defaultSize={{ width: 320, height: 260 }}
       bounds={{ minWidth: 180, minHeight: 96, maxWidth: 900, maxHeight: 900 }}
       className="group"
+      claimLock={nodeLock.claim}
+      releaseLock={nodeLock.release}
     >
       <NodeActionToolbar
         nodeId={id}

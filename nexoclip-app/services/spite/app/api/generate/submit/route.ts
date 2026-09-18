@@ -153,7 +153,7 @@ function mapLegacyParameters(body: Record<string, unknown>, kind: 'image' | 'vid
 }
 
 function isBytePlusSeedance(model: string): boolean {
-  return /(?:^|\/)seedance(?:[-.]|$)/i.test(model) || /^ep-20260916130618-t2z5j$/i.test(model)
+  return /(?:^|\/)(?:dreamina-)?seedance(?:[-.]|$)/i.test(model) || /^ep-20260916130618-t2z5j$/i.test(model)
 }
 
 function hasOnlyCanonicalAssetReferences(parameters: Record<string, unknown>): boolean {

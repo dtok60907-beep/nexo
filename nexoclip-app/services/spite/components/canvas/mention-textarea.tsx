@@ -193,7 +193,14 @@ function renderInitial(
           selectedAssetIds:
             'assets' in folder ? folder.assets.map((a) => a.id) : [],
         }
-      el.appendChild(makeChipElement(folder, m.selectedAssetIds, document, m.selectedWorkspaceAssetIds || ('assets' in folder ? folder.assets.map((asset) => asset.workspaceAssetId).filter((id): id is string => Boolean(id)) : [])))
+      const selectedLegacyIds = new Set(m.selectedAssetIds)
+      const derivedWorkspaceIds = 'assets' in folder
+        ? folder.assets
+            .filter((asset) => selectedLegacyIds.size === 0 || selectedLegacyIds.has(asset.id))
+            .map((asset) => asset.workspaceAssetId)
+            .filter((id): id is string => Boolean(id))
+        : []
+      el.appendChild(makeChipElement(folder, m.selectedAssetIds, document, m.selectedWorkspaceAssetIds || derivedWorkspaceIds))
     } else {
       // Unresolved tag — keep the literal text so the user can fix it.
       el.appendChild(document.createTextNode(match[0]))

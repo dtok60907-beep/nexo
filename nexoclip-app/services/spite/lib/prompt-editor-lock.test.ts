@@ -19,11 +19,11 @@ function fakeSql(results: unknown[][]) {
   return { sql: sql as any, queries }
 }
 
-test('generic node schema migrates only live prompt leases', async () => {
-  const fixture = fakeSql([[], []])
+test('generic node schema keeps the existing table as one rolling-deploy authority', async () => {
+  const fixture = fakeSql([[]])
   await ensureCanvasNodeLocks(fixture.sql)
-  assert.match(fixture.queries[0], /create table if not exists canvas_node_locks/)
-  assert.match(fixture.queries[1], /from canvas_prompt_editor_locks where expires_at > now\(\)/)
+  assert.equal(fixture.queries.length, 1)
+  assert.match(fixture.queries[0], /create table if not exists canvas_prompt_editor_locks/)
 })
 
 test('claim uses one project-node authority and permits only expiry or same owner', async () => {

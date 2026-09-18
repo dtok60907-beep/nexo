@@ -161,6 +161,8 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
       data={data}
       defaultSize={{ width: 340, height: 192 }}
       bounds={{ minWidth: 180, minHeight: 96, maxWidth: 900, maxHeight: 900 }}
+      claimLock={() => sendEditorLock('claim')}
+      releaseLock={() => { void sendEditorLock('release') }}
     >
       <NodeActionToolbar nodeId={id} selected={selected} />
 
