@@ -11,6 +11,8 @@ import { useProjectFolders } from '@/hooks/use-project-folders'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { createLocalStateSyncGuard } from '@/lib/local-state-sync'
 import { mentionStateKey, shouldApplyRemoteMentionState } from '@/lib/mention-state'
+import { withBasePath } from '@/lib/base-path'
+import { getOrCreateParticipantHint } from '@/lib/realtime/presence'
 
 function HandleIcon({ icon: Icon, color, style }: { icon: React.ElementType; color: string; style?: React.CSSProperties }) {
   return (
@@ -47,6 +49,8 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
   // takes focus, and the user can type / select chips normally.
   // Clicking outside the card (or pressing Escape) exits edit mode.
   const [editing, setEditing] = useState(false)
+  const [claimingEditorLock, setClaimingEditorLock] = useState(false)
+  const [editorLockError, setEditorLockError] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<MentionTextareaRef>(null)
   const syncGuardRef = useRef(createLocalStateSyncGuard())
@@ -83,6 +87,36 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
     patchNodeData(id, { text: nextText, mentions: nextMentions })
   }, [id, patchNodeData])
 
+  const participantIdRef = useRef<string | null>(null)
+  const sendEditorLock = useCallback(async (action: 'claim' | 'heartbeat' | 'release') => {
+    if (!projectId) return false
+    const participantId = participantIdRef.current ?? getOrCreateParticipantHint()
+    participantIdRef.current = participantId
+    const response = await fetch(withBasePath(`/api/projects/${encodeURIComponent(projectId)}/prompt-editor-lock`), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, nodeId: id, participantId }),
+    })
+    return response.ok
+  }, [id, projectId])
+
+  useEffect(() => {
+    if (!editing) return
+    const heartbeat = window.setInterval(() => {
+      void sendEditorLock('heartbeat').then((locked) => {
+        if (!locked) {
+          setEditorLockError('Editor lock expired. Please open the node again.')
+          setEditing(false)
+        }
+      })
+    }, 5_000)
+    return () => {
+      window.clearInterval(heartbeat)
+      void sendEditorLock('release')
+    }
+  }, [editing, sendEditorLock])
+
   // Exit editing when the user clicks anywhere outside this card.
   useEffect(() => {
     if (!editing) return
@@ -100,12 +134,25 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
     }
   }, [editing])
 
-  const enterEdit = () => {
-    void refreshFolders()
-    setEditing(true)
-    // Defer focus until after the overlay unmounts so the editor div
-    // can actually receive focus.
-    setTimeout(() => editorRef.current?.focus(), 0)
+  const enterEdit = async () => {
+    if (editing || claimingEditorLock) return
+    setClaimingEditorLock(true)
+    setEditorLockError(null)
+    try {
+      if (!(await sendEditorLock('claim'))) {
+        setEditorLockError('Prompt ini sedang diedit oleh user lain.')
+        return
+      }
+      void refreshFolders()
+      setEditing(true)
+      // Defer focus until after the overlay unmounts so the editor div
+      // can actually receive focus.
+      setTimeout(() => editorRef.current?.focus(), 0)
+    } catch {
+      setEditorLockError('Tidak bisa mengunci editor. Coba lagi.')
+    } finally {
+      setClaimingEditorLock(false)
+    }
   }
 
   return (
@@ -149,6 +196,12 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
           rows={6}
         />
 
+        {editorLockError && (
+          <div className="absolute left-3 right-3 bottom-3 rounded bg-amber-500/15 px-2 py-1 text-[10px] text-amber-200 pointer-events-none">
+            {editorLockError}
+          </div>
+        )}
+
         {/* Drag-capture overlay. When not editing, this sits on top of
             the textarea, intercepts single-clicks, and — because it
             doesn't carry `nodrag` — lets React Flow start a node drag
@@ -158,8 +211,8 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
         {!editing && (
           <div
             className="absolute inset-0"
-            onDoubleClick={enterEdit}
-            title="Double-click to edit · drag to move"
+            onDoubleClick={() => { void enterEdit() }}
+            title={claimingEditorLock ? 'Claiming editor lock…' : 'Double-click to edit · drag to move'}
             style={{ cursor: 'grab' }}
             onMouseDown={(e) => { (e.currentTarget as HTMLElement).style.cursor = 'grabbing' }}
             onMouseUp={(e) => { (e.currentTarget as HTMLElement).style.cursor = 'grab' }}
