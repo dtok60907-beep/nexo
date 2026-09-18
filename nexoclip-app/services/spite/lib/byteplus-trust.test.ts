@@ -12,6 +12,7 @@ const nodeToolbarSource = readFileSync(new URL('../components/canvas/nodes/node-
 
 import {
   applyBytePlusTrustState,
+  mergeAssetPreservingBytePlusTrust,
   bytePlusTrustUrl,
   bytePlusTrustPollDelay,
   requestBytePlusTrust,
@@ -204,6 +205,13 @@ test('processing trust polling uses one recursive timeout with cleanup, not an o
   assert.match(toolbarSource, /document\.addEventListener\('visibilitychange'/)
   assert.match(toolbarSource, /document\.hidden/)
   assert.match(pollingEffect, /bytePlusTrustPollDelay/)
+})
+
+test('asset revalidation does not erase a locally confirmed trust state', () => {
+  const current = { id: 'image-1', r2_url: '/canonical', byteplus_trust: { status: 'active' as const } }
+  const refreshed = { id: 'image-1', r2_url: '/canonical' }
+
+  assert.deepEqual(mergeAssetPreservingBytePlusTrust(current, refreshed), current)
 })
 
 test('trust responses update the matching list item without requiring an ID in the payload', () => {
