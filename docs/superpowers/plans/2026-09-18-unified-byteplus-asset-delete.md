@@ -120,9 +120,9 @@
 **Interfaces:**
 - Produces safe error code `BYTEPLUS_ASSET_STALE`; user message instructs “Trust this asset again”.
 
-- [ ] **Step 1: Write failing tests** proving provider not-found invalidates only the matching attempt/provider mapping and stops generation; newer mapping remains active.
+- [ ] **Step 1: Write failing tests** proving provider not-found invalidates only the matching attempt/provider mapping and stops generation; newer mapping remains active. Cover `startTrust()` validating an active provider mapping before reuse: valid assets skip `CreateAsset`, missing assets CAS-invalidate then create a replacement with a new attempt/provider ID, processing remains processing, and 429/5xx/timeouts preserve the active mapping as retryable.
 - [ ] **Step 2: Run both focused test files** and verify failures.
-- [ ] **Step 3: Catch classified not-found errors** in Trust polling and generation provider boundaries, CAS the link to failed, and throw the safe actionable error.
+- [ ] **Step 3: Catch classified not-found errors** in Trust polling, `startTrust()`, and generation provider boundaries. CAS the link to failed, reset the stale provider/group identity where required, create a replacement only for confirmed not-found/failed mappings, and throw safe actionable errors for generation. Never auto-recreate on authorization/project mismatch or transient provider failures.
 - [ ] **Step 4: Run tests** and confirm zero failures.
 - [ ] **Step 5: Commit** `fix(byteplus): invalidate stale trusted mappings`.
 
