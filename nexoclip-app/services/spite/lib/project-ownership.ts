@@ -38,7 +38,7 @@ export async function userOwnsFolder(sql: Sql, userId: string, folderId: string)
   const rows = await sql`
     SELECT 1
     FROM asset_folders f
-    JOIN projects p ON p.id = f.project_id
+    JOIN projects p ON p.id::text = f.project_id::text
     WHERE f.id::text = ${folderId} AND p.userid = ${userId}
     LIMIT 1
   `
@@ -85,8 +85,8 @@ export async function countOwnedGenerationAssetsForProject(
     FROM generation_history g
     JOIN projects p ON p.id::text = g.project_id::text
     WHERE p.userid = ${userId}
-      AND g.project_id = ${projectId}
-      AND g.id = ANY(${assetIds}::text[])
+      AND g.project_id::text = ${projectId}::text
+      AND g.id::text = ANY(${assetIds}::text[])
   ` as Array<{ owned_count: number }>
 
   return Number(rows[0]?.owned_count ?? 0)

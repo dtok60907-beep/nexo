@@ -11,7 +11,7 @@ import { createFoldersRouteHandlers } from '@/app/api/folders/route'
 import { createGenerateSubmitHandler } from '@/app/api/generate/submit/route'
 import { createGenerateStatusHandler } from '@/app/api/generate/status/route'
 import { createGenerateLatestHandler } from '@/app/api/generate/latest/route'
-import { countOwnedGenerationAssetsForProject } from '@/lib/project-ownership'
+import { countOwnedGenerationAssetsForProject, userOwnsFolder } from '@/lib/project-ownership'
 
 const OWNER_ID = '550e8400-e29b-41d4-a716-446655440001'
 const OTHER_USER_ID = '550e8400-e29b-41d4-a716-446655440002'
@@ -27,8 +27,19 @@ test('compares text generation asset IDs to UUID project IDs safely', async () =
 
   assert.equal(await countOwnedGenerationAssetsForProject(sql, OWNER_ID, OWNER_PROJECT_ID, ['550e8400-e29b-41d4-a716-446655440010']), 1)
   assert.match(query, /p\.id::text = g\.project_id/)
-  assert.match(query, /g\.project_id =\s+\?/)
-  assert.match(query, /g\.id = ANY\(\s*\?\s+::text\[\]\)/)
+  assert.match(query, /g\.project_id::text =\s+\?\s+::text/)
+  assert.match(query, /g\.id::text = ANY\(\s*\?\s+::text\[\]\)/)
+})
+
+test('compares UUID projects to mixed-schema folder project ids safely', async () => {
+  let query = ''
+  const sql = (async (strings: TemplateStringsArray) => {
+    query = strings.join(' ? ')
+    return [{ ok: 1 }]
+  }) as any
+
+  assert.equal(await userOwnsFolder(sql, OWNER_ID, 'folder-1'), true)
+  assert.match(query, /p\.id::text = f\.project_id::text/)
 })
 
 function makeRequest(url: string, {

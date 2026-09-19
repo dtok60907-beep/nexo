@@ -20,6 +20,62 @@ function sqlForWorkspaceAsset() {
   }) as any
 }
 
+test('internal cleanup takes precedence over a colliding legacy generation id', async () => {
+  let queriedGeneration = false
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (query.includes('from generation_history')) {
+      queriedGeneration = true
+      return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: 'legacy.png' }]
+    }
+    if (query.includes('select id::text as id from projects')) return [{ id: PROJECT_ID }]
+    if (query.startsWith('delete from asset_folder_items')) return []
+    throw new Error(`Unhandled SQL: ${query}`)
+  }) as any
+  const handlers = createAssetRouteHandlers({
+    getDb: () => sql,
+    getAuthenticatedUser: async () => ({ id: USER_ID }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: { nodes: [], edges: [], scenes: [] } }),
+    }) as any,
+  })
+
+  const response = await handlers.DELETE(new Request('http://spite.test/api/assets/asset-1?cleanup=1', {
+    method: 'DELETE',
+  }), { params: Promise.resolve({ assetId: 'asset-1' }) })
+
+  assert.equal(response.status, 200)
+  assert.equal(queriedGeneration, false)
+})
+
+test('canonical workspace deletion takes precedence over a colliding legacy generation id', async () => {
+  let proxied = false
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+    if (query.includes('from generation_history')) {
+      return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: 'legacy.png' }]
+    }
+    if (query.includes('select 1 from projects')) return [{ ok: 1 }]
+    throw new Error(`Unhandled SQL: ${query}`)
+  }) as any
+  const handlers = createAssetRouteHandlers({
+    getDb: () => sql,
+    getAuthenticatedUser: async () => ({ id: USER_ID }),
+    fetchFn: async () => {
+      proxied = true
+      return Response.json({ success: true })
+    },
+    env: { NEXOCLIP_INTERNAL_URL: 'http://nexoclip:3000' },
+  } as any)
+
+  const response = await handlers.DELETE(new Request(`http://spite.test/api/assets/asset-1?projectId=${PROJECT_ID}`, {
+    method: 'DELETE', headers: { cookie: 'session=abc' },
+  }), { params: Promise.resolve({ assetId: 'asset-1' }) })
+
+  assert.equal(response.status, 200)
+  assert.equal(proxied, true)
+})
+
 test('internal cleanup removes canonical Canvas references before local deletion', async () => {
   const patched: any[] = []
   let proxied = false
