@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { findExactTrustedWorkspaceAsset } from './assetService.js';
 import { createProviderRouter, markTrustedAssetRequest } from '../providers/providerRouter.js';
 import { createGeneratedAsset } from '../repositories/assetMetadataRepository.js';
-import { findBytePlusAssetLink as findStoredBytePlusAssetLink } from '../repositories/byteplusAssetRepository.js';
+import {
+  findBytePlusAssetLink as findStoredBytePlusAssetLink,
+  markBytePlusAssetLinkStale as markStoredBytePlusAssetLinkStale,
+} from '../repositories/byteplusAssetRepository.js';
 import { isDirectBytePlusSeedance } from '../providers/providerRegistry.js';
 import { resolveReferenceImages } from './saasImageGeneration.js';
 
@@ -41,10 +44,11 @@ function videoRequest(job, { referenceImages, frameImages, referenceVideos }) {
   };
 }
 
-export function createSaasVideoHandler({ pool, storage, referenceStorage = storage, providerRouter, findBytePlusAssetLink = findStoredBytePlusAssetLink, findExactTrustedAsset = findExactTrustedWorkspaceAsset, env = process.env, createAsset = createGeneratedAsset, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollIntervalMs = 5_000, maxPolls = 120 }) {
+export function createSaasVideoHandler({ pool, storage, referenceStorage = storage, providerRouter, findBytePlusAssetLink = findStoredBytePlusAssetLink, markBytePlusAssetLinkStale = markStoredBytePlusAssetLinkStale, findExactTrustedAsset = findExactTrustedWorkspaceAsset, env = process.env, createAsset = createGeneratedAsset, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), pollIntervalMs = 5_000, maxPolls = 120 }) {
   if (!pool || !storage || !providerRouter) throw new TypeError('pool, storage, and provider router are required');
   return async (job) => {
     let hasTrustedAsset = false;
+    const trustedMappings = [];
     const deferredTrustedAssetErrors = new Map();
     const projectName = env.BYTEPLUS_PROJECT_NAME?.trim() || 'default';
     const resolveWorkspaceAsset = isDirectBytePlusSeedance(job.model, env)
@@ -58,6 +62,10 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
         }
         if (link.status === 'active' && link.provider_asset_id?.trim()) {
           hasTrustedAsset = true;
+          trustedMappings.push({
+            workspaceId, localAssetId: assetId, providerAssetId: link.provider_asset_id.trim(),
+            attemptId: link.attempt_id,
+          });
           return `asset://${link.provider_asset_id.trim()}`;
         }
         // A duplicate may have a newer Trust attempt still processing while an
@@ -95,7 +103,18 @@ export function createSaasVideoHandler({ pool, storage, referenceStorage = stora
       }
     }
     const request = videoRequest(job, { referenceImages, frameImages, referenceVideos });
-    const submitted = await providerRouter.submitVideo(hasTrustedAsset ? markTrustedAssetRequest(request) : request);
+    let submitted;
+    try {
+      submitted = await providerRouter.submitVideo(hasTrustedAsset ? markTrustedAssetRequest(request) : request);
+    } catch (error) {
+      if (!error?.assetNotFound || trustedMappings.length === 0) throw error;
+      await Promise.all(trustedMappings.map(mapping => markBytePlusAssetLinkStale(pool, {
+        ...mapping, errorCode: 'BYTEPLUS_ASSET_NOT_FOUND',
+      })));
+      throw Object.assign(new Error('Trusted BytePlus asset is missing. Trust this asset again before generating.'), {
+        code: 'BYTEPLUS_ASSET_STALE', status: 422,
+      });
+    }
     const provider = submitted.provider || 'openrouter';
     const providerRequestId = submitted.id || submitted.providerRequestId;
     if (!providerRequestId) throw Object.assign(new Error('Provider returned no video request id'), { code: 'PROVIDER_INVALID_RESPONSE' });

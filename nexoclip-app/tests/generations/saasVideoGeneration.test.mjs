@@ -22,10 +22,11 @@ test('durable video handler submits, polls, downloads, and persists a tenant ass
   assert.equal(puts.length, 1);
 });
 
-function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {} } = {}) {
+function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seedance-2.5', env = {}, assets = {}, submitError } = {}) {
   const submitted = [];
   const downloads = [];
   const lookups = [];
+  const staleMappings = [];
   const pool = {
     async query(_sql, values) {
       const assetId = values[1];
@@ -41,7 +42,7 @@ function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seed
       async put() {},
     },
     providerRouter: {
-      async submitVideo(request) { submitted.push(request); return { id: 'provider-job', provider: 'byteplus' }; },
+      async submitVideo(request) { submitted.push(request); if (submitError) throw submitError; return { id: 'provider-job', provider: 'byteplus' }; },
       async pollVideo() { return { status: 'completed' }; },
       async downloadVideo() { return { buffer: Buffer.from('video'), contentType: 'video/mp4' }; },
     },
@@ -51,11 +52,12 @@ function trustedHandler({ links = {}, exactMatches = {}, model = 'bytedance/seed
       return link ? { project_name: env.BYTEPLUS_PROJECT_NAME || 'default', ...link } : null;
     },
     findExactTrustedAsset: async ({ excludeAssetId }) => exactMatches[excludeAssetId] || null,
+    markBytePlusAssetLinkStale: async (_client, input) => { staleMappings.push(input); return true; },
     createAsset: async () => ({ id: 'output-1' }),
     sleep: async () => {},
     env,
   });
-  return { handler, submitted, downloads, lookups, model };
+  return { handler, submitted, downloads, lookups, staleMappings, model };
 }
 
 const assetUrl = (id) => `/api/assets/${id}/download`;
@@ -74,6 +76,21 @@ test('active workspace mapping substitutes an asset URI before download for stan
   assert.equal(isTrustedAssetRequest(request), true);
   assert.deepEqual(setup.lookups, [['workspace-1', 'asset-1']]);
   assert.deepEqual(setup.downloads, []);
+});
+
+test('provider missing-asset failure invalidates the exact trusted mapping and stops reuse', async () => {
+  const setup = trustedHandler({
+    links: { 'workspace-1:asset-1': { workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'provider-1', attempt_id: 'attempt-1' } },
+    submitError: Object.assign(new Error('safe failure'), { code: 'BYTEPLUS_REQUEST_FAILED', assetNotFound: true }),
+  });
+  await assert.rejects(
+    runTrusted(setup, { referenceImages: [assetUrl('asset-1')] }),
+    error => error.code === 'BYTEPLUS_ASSET_STALE' && /Trust this asset again/.test(error.message),
+  );
+  assert.deepEqual(setup.staleMappings, [{
+    workspaceId: 'workspace-1', localAssetId: 'asset-1', providerAssetId: 'provider-1',
+    attemptId: 'attempt-1', errorCode: 'BYTEPLUS_ASSET_NOT_FOUND',
+  }]);
 });
 
 test('dedicated Seedance alias resolves through its configured BytePlus endpoint', async () => {

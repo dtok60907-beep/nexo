@@ -16,6 +16,7 @@ import {
   type InternalRealtimeClient,
 } from '@/lib/realtime/internal-client'
 import { getR2Client } from '@/lib/r2-upload'
+import { workspaceAssetReferencePatches } from '@/lib/workspace-asset-delete'
 
 function assetKeyFromUrl(url: string | null): string | null {
   if (!url) return null
@@ -146,46 +147,53 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
 
         const sql = db()
         const { assetId } = await params
-        const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
-        if (!asset) {
-          const projectId = new URL(request.url).searchParams.get('projectId')
-          if (!projectId || !(await userOwnsProject(sql, user.id, projectId))) return assetNotFoundResponse()
+        const search = new URL(request.url).searchParams
+        const projectId = search.get('projectId')
+        const cleanupOnly = search.get('cleanup') === '1'
 
+        if (cleanupOnly) {
           const ownedProjects = await sql`
             SELECT id::text AS id FROM projects WHERE userid = ${user.id}
           ` as Array<{ id: string }>
           const realtime = internalRealtime()
-          const authoritativeDocuments = await Promise.all(
-            ownedProjects.map(({ id }) => realtime.exportDocument({ userId: user.id, projectId: id })),
-          )
-          if (authoritativeDocuments.some(({ projection }) => projectionHasMediaReference(projection, { assetId }))) {
-            return NextResponse.json({ error: 'Asset is still used on a canvas' }, { status: 403 })
+          for (const { id } of ownedProjects) {
+            const { projection } = await realtime.exportDocument({ userId: user.id, projectId: id })
+            for (const patch of workspaceAssetReferencePatches(projection, assetId)) {
+              await realtime.patchNodeData({ userId: user.id, projectId: id, ...patch })
+            }
           }
+          const removedRows = await sql`
+            DELETE FROM asset_folder_items
+            WHERE workspace_asset_id::text = ${assetId}
+              AND folder_id IN (
+                SELECT f.id FROM asset_folders f
+                JOIN projects p ON p.id::text = f.project_id::text
+                WHERE p.userid = ${user.id}
+              )
+            RETURNING folder_id
+          ` as Array<{ folder_id: string }>
+          await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
+          return NextResponse.json({ complete: true })
+        }
 
-          const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')
-          if (!baseUrl) return NextResponse.json({ error: 'Workspace asset service is unavailable' }, { status: 503 })
+        if (projectId && !(await userOwnsProject(sql, user.id, projectId))) return assetNotFoundResponse()
+
+        const baseUrl = env.NEXOCLIP_INTERNAL_URL?.trim().replace(/\/$/, '')
+        if (baseUrl) {
           const upstream = await fetchFn(`${baseUrl}/api/assets/${encodeURIComponent(assetId)}`, {
             method: 'DELETE',
             headers: { cookie: request.headers.get('cookie') ?? '' },
           })
-          if (upstream.ok) {
-            const removedRows = await sql`
-              DELETE FROM asset_folder_items
-              WHERE asset_id = ${assetId}
-                AND folder_id IN (
-                  SELECT f.id FROM asset_folders f
-                  JOIN projects p ON p.id = f.project_id
-                  WHERE p.userid = ${user.id}
-                )
-              RETURNING folder_id
-            ` as Array<{ folder_id: string }>
-            await deleteEmptyAssetFolders(sql, removedRows.map(row => row.folder_id))
+          if (upstream.status !== 404) {
+            return new NextResponse(await upstream.text(), {
+              status: upstream.status,
+              headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+            })
           }
-          return new NextResponse(await upstream.text(), {
-            status: upstream.status,
-            headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
-          })
         }
+
+        const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
+        if (!asset) return assetNotFoundResponse()
 
         const removedRows = await sql`
           DELETE FROM asset_folder_items WHERE asset_id = ${assetId}

@@ -1,6 +1,7 @@
 'use client'
 
 import { withBasePath } from '@/lib/base-path'
+import { importImageForTrust, workspaceAssetIdFromUrl } from '@/lib/byteplus-trust'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -110,17 +111,16 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       }
       if (!legacyId) throw new Error('asset registration returned no id')
 
-      // Every folder path, including assetId+assetUrl callers, must import to
-      // the durable workspace Assets library. Exact-byte reuse avoids copies.
-      const source = await fetch(assetUrl)
-      if (!source.ok) throw new Error(`asset download returned ${source.status}`)
-      const form = new FormData()
-      form.set('file', new File([await source.blob()], 'canvas-image', { type: source.headers.get('content-type') || 'image/png' }))
-      const imported = await fetch('/api/assets/import', { method: 'POST', body: form })
-      if (!imported.ok) throw new Error(`asset import returned ${imported.status}`)
-      const canonical = await imported.json()
-      if (!canonical?.asset?.id) throw new Error('asset import returned no workspace asset id')
-      return { id: legacyId, workspaceAssetId: canonical.asset.id, url: assetUrl }
+      // Durable generation URLs already identify the canonical workspace
+      // asset. Reuse that identity instead of downloading it cross-origin;
+      // Railway's HTTP service intentionally does not grant browser CORS.
+      const canonicalAssetId = workspaceAssetIdFromUrl(assetUrl)
+      if (canonicalAssetId) return { id: legacyId, workspaceAssetId: canonicalAssetId, url: assetUrl }
+
+      // Route legacy Spite media through its authenticated same-origin import
+      // mode; fetching an absolute Railway URL in the browser is blocked by CORS.
+      const canonical = await importImageForTrust({ url: assetUrl })
+      return { id: legacyId, workspaceAssetId: canonical.assetId, url: canonical.canonicalUrl }
     })()
     assetResolutionRef.current = { key, promise }
     promise.catch(() => {
@@ -334,10 +334,8 @@ export function AddToFolderModal({ open, onClose, folderType, projectId, assetId
       if (!editFolder && assetUrl) {
         const generatedAsset = await registerAssetByUrl()
         if (!generatedAsset) throw new Error('generated asset is not ready')
-        if (!readyAssets.some(asset => asset.id === generatedAsset.id)) {
-          readyAssets = [...readyAssets, generatedAsset]
-          setSelectedAssets(prev => [...prev.filter(asset => asset.id !== generatedAsset.id), generatedAsset])
-        }
+        readyAssets = [...readyAssets.filter(asset => asset.id !== generatedAsset.id), generatedAsset]
+        setSelectedAssets(prev => [...prev.filter(asset => asset.id !== generatedAsset.id), generatedAsset])
       }
       const legacyAssets = readyAssets.filter(asset => !asset.workspaceAssetId)
       if (legacyAssets.length > 0) {

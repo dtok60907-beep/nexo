@@ -272,7 +272,9 @@ test('folders reject foreign asset ids atomically on create and replace', async 
       normalized.startsWith('create table asset_folders') ||
       normalized.startsWith('create index idx_asset_folders_project on asset_folders') ||
       normalized.startsWith('create table asset_folder_items') ||
-      normalized.startsWith('create index idx_asset_folder_items_asset on asset_folder_items')
+      normalized.startsWith('create index idx_asset_folder_items_asset on asset_folder_items') ||
+      normalized.startsWith('alter table asset_folder_items add column if not exists workspace_asset_id') ||
+      normalized.startsWith('create index if not exists idx_folder_items_workspace_asset')
     ) {
       return []
     }
@@ -289,7 +291,7 @@ test('folders reject foreign asset ids atomically on create and replace', async 
       return [{ ok: 1 }]
     }
 
-    if (normalized.includes('select count(*)::int as owned_count from generation_history g join projects p on p.id::text = g.project_id') && normalized.includes('g.id = any(')) {
+    if (normalized.includes('select count(*)::int as owned_count from generation_history g join projects p on p.id::text = g.project_id::text') && normalized.includes('g.id::text = any(')) {
       return [{ owned_count: 1 }]
     }
 
@@ -298,7 +300,7 @@ test('folders reject foreign asset ids atomically on create and replace', async 
       return []
     }
 
-    if (normalized.startsWith('select 1 from asset_folders f join projects p on p.id = f.project_id where f.id = ? and p.userid = ? limit 1')) {
+    if (normalized.startsWith('select 1 from asset_folders f join projects p on p.id::text = f.project_id::text where f.id::text = ? and p.userid = ? limit 1')) {
       return [{ ok: 1 }]
     }
 

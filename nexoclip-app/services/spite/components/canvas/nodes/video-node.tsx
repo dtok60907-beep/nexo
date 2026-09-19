@@ -3,7 +3,7 @@
 import { withBasePath, withGenerationOutputBasePath } from '@/lib/base-path'
 import { Position, NodeProps, Handle, useReactFlow, useUpdateNodeInternals } from '@xyflow/react'
 import { useParams } from 'next/navigation'
-import { Play, CaretDown, SpeakerHigh, SpeakerSlash, TextT, Image as ImageIcon, FilmStrip, CircleNotch, X, Check, ArrowsClockwise, Minus, Plus } from '@phosphor-icons/react'
+import { Play, CaretDown, TextT, Image as ImageIcon, FilmStrip, CircleNotch, X, Check, ArrowsClockwise, Minus, Plus } from '@phosphor-icons/react'
 import { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { NodeActionToolbar } from './node-toolbar'
@@ -156,7 +156,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const [duration, setDuration] = useState((data.duration as string) || '')
   const [aspectRatio, setAspectRatio] = useState('9:16')
   const [resolution, setResolution] = useState((data.resolution as string) || '')
-  const [enableAudio, setEnableAudio] = useState((data.enableAudio as boolean) || false)
+  const [enableAudio, setEnableAudio] = useState((data.enableAudio as boolean | undefined) ?? true)
   const [enableLoop, setEnableLoop] = useState((data.enableLoop as boolean) || false)
   // Kling 2.6 voice IDs — up to 2, comma-separated in the input box.
   // User pastes IDs they generated from fal's create-voice endpoint;
@@ -263,7 +263,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     setDuration((data.duration as string) || '')
     setAspectRatio('9:16')
     setResolution((data.resolution as string) || '')
-    setEnableAudio((data.enableAudio as boolean) || false)
+    setEnableAudio((data.enableAudio as boolean | undefined) ?? true)
     setEnableLoop((data.enableLoop as boolean) || false)
     setVoiceIds((data.voiceIds as string) || '')
     setNumVideos((data.numVideos as number) || 1)
@@ -1284,7 +1284,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
                   aspectRatio: nextAspectRatio,
                   duration: nextDuration,
                   resolution: nextResolution,
-                  enableAudio: false,
+                  enableAudio: true,
                 })
               }}
               disabled={isGenerating}
@@ -1355,30 +1355,6 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
                 }}
                 disabled={isGenerating}
               />
-            )}
-            
-            {/* Audio toggle - only if model supports audio generation */}
-            {currentModel?.supportsAudio && (
-              <button
-                onClick={() => {
-                  syncGuardRef.current.beginUserEdit()
-                  setEnableAudio(a => {
-                    const next = !a
-                    patchPersistedNodeData({ enableAudio: next })
-                    return next
-                  })
-                }}
-                disabled={isGenerating}
-                className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors disabled:opacity-50 ${
-                  enableAudio ? 'bg-accent/20 text-accent' : 'bg-white/5 hover:bg-white/10 text-muted-foreground'
-                }`}
-                title="Generate with audio"
-              >
-                {enableAudio
-                  ? <SpeakerHigh size={11} weight="fill" />
-                  : <SpeakerSlash size={11} weight="thin" />
-                }
-              </button>
             )}
             
             {/* Loop toggle - only if model supports loop */}

@@ -5,7 +5,7 @@ import { BytePlusAssetsError } from '../../src/providers/byteplusAssetsClient.js
 import { listWorkspaceAssets } from '../../src/services/assetService.js';
 import { createBytePlusAssetTrustService } from '../../src/services/byteplusAssetTrustService.js';
 
-function fixture({ asset, link, casLosesTo, now = () => new Date('2026-09-16T12:00:00Z') } = {}) {
+function fixture({ asset, link, casLosesTo, providerGet, now = () => new Date('2026-09-16T12:00:00Z') } = {}) {
   let current = link ? {
     project_name: 'project-x',
     attempt_id: '00000000-0000-4000-8000-000000000001',
@@ -64,8 +64,19 @@ function fixture({ asset, link, casLosesTo, now = () => new Date('2026-09-16T12:
       current = { ...current, status: input.status, error: input.error ?? null };
       return { ...current };
     },
+    async markBytePlusAssetLinkStale(_client, input) {
+      calls.cas.push(input);
+      if (casLosesTo) {
+        current = { ...current, ...casLosesTo };
+        return false;
+      }
+      if (current.attempt_id !== input.attemptId || current.provider_asset_id !== input.providerAssetId) return false;
+      current = { ...current, status: 'failed', error: { code: input.errorCode } };
+      return true;
+    },
     async resetBytePlusAssetLink(_client, input) {
       calls.resets += 1;
+      if (input.expectedAttemptId && current.attempt_id !== input.expectedAttemptId) return null;
       current = {
         ...current,
         group_id: input.clearGroup ? null : current.group_id,
@@ -81,7 +92,11 @@ function fixture({ asset, link, casLosesTo, now = () => new Date('2026-09-16T12:
   const provider = {
     async createAssetGroup(input) { calls.groups.push(input); calls.queries.push({ text: 'PROVIDER create-group' }); return { Id: 'group-secret' }; },
     async createAsset(input) { calls.assets.push(input); calls.queries.push({ text: 'PROVIDER create-asset' }); return { Id: 'provider-asset-secret' }; },
-    async getAsset(input) { calls.gets.push(input); return { Status: 'Processing' }; },
+    async getAsset(input) {
+      calls.gets.push(input);
+      if (providerGet instanceof Error) throw providerGet;
+      return providerGet || { Status: 'Processing' };
+    },
   };
   const service = createBytePlusAssetTrustService({
     pool: { async connect() { return client; } },
@@ -170,17 +185,58 @@ test('rejects non-images and cannot see assets from another workspace', async ()
   assert.equal(outsideWorkspace.getLink(), null);
 });
 
-test('POST is idempotent for usable processing and active links', async () => {
-  for (const link of [
-    { workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'processing', provider_asset_id: 'provider-1' },
-    { workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'provider-1' },
-  ]) {
-    const { service, calls } = fixture({ asset: image, link });
-    assert.deepEqual(await service.startTrust('workspace-1', 'asset-1'), { status: link.status });
-    assert.equal(calls.groups.length, 0);
-    assert.equal(calls.assets.length, 0);
-    assert.equal(calls.downloads.length, 0);
-  }
+test('POST reuses processing links and provider-validated active links', async () => {
+  const processing = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'processing', provider_asset_id: 'provider-1',
+  } });
+  assert.deepEqual(await processing.service.startTrust('workspace-1', 'asset-1'), { status: 'processing' });
+  assert.equal(processing.calls.gets.length, 0);
+
+  const active = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'provider-1',
+  }, providerGet: { Status: 'Active' } });
+  assert.deepEqual(await active.service.startTrust('workspace-1', 'asset-1'), { status: 'active' });
+  assert.deepEqual(active.calls.gets, [{ assetId: 'provider-1' }]);
+  assert.equal(active.calls.assets.length, 0);
+  assert.equal(active.calls.downloads.length, 0);
+});
+
+test('POST replaces a confirmed-missing active provider asset for the same local image', async () => {
+  const stale = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active',
+    provider_asset_id: 'deleted-provider', group_id: 'stable-group', attempt_id: '00000000-0000-4000-8000-000000000099',
+  }, providerGet: new BytePlusAssetsError('missing', { code: 'AssetNotFound', status: 404 }) });
+
+  assert.deepEqual(await stale.service.startTrust('workspace-1', 'asset-1'), { status: 'processing' });
+  assert.equal(stale.calls.resets, 1);
+  assert.equal(stale.calls.groups.length, 0);
+  assert.equal(stale.calls.assets.length, 1);
+  assert.equal(stale.getLink().provider_asset_id, 'provider-asset-secret');
+  assert.notEqual(stale.getLink().attempt_id, '00000000-0000-4000-8000-000000000099');
+});
+
+test('POST keeps an active mapping on transient validation failure', async () => {
+  const transient = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'provider-1',
+  }, providerGet: new BytePlusAssetsError('unavailable', { code: 'BYTEPLUS_ASSETS_UNAVAILABLE', status: 503, retryable: true }) });
+
+  await assert.rejects(transient.service.startTrust('workspace-1', 'asset-1'), error => error.retryable === true);
+  assert.equal(transient.getLink().status, 'active');
+  assert.equal(transient.calls.resets, 0);
+  assert.equal(transient.calls.assets.length, 0);
+});
+
+test('stale validation cannot overwrite a concurrent newer trust attempt', async () => {
+  const raced = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'deleted-provider',
+  }, providerGet: new BytePlusAssetsError('missing', { code: 'AssetNotFound', status: 404 }), casLosesTo: {
+    status: 'processing', provider_asset_id: 'new-provider', attempt_id: 'new-attempt',
+  } });
+
+  assert.deepEqual(await raced.service.startTrust('workspace-1', 'asset-1'), { status: 'processing' });
+  assert.equal(raced.calls.resets, 0);
+  assert.equal(raced.calls.assets.length, 0);
+  assert.equal(raced.getLink().provider_asset_id, 'new-provider');
 });
 
 test('POST retries failed and corrupt active links', async () => {
@@ -299,6 +355,20 @@ test('project mismatch blocks refresh and worker-safe state requires explicit re
   });
   assert.equal(mismatch.calls.gets.length, 0);
 });
+
+test('GET validates active links and exposes confirmed missing assets as not trusted', async () => {
+  const valid = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'provider-1',
+  }, providerGet: { Status: 'Active' } });
+  assert.deepEqual(await valid.service.getTrust('workspace-1', 'asset-1'), { status: 'active' });
+
+  const stale = fixture({ asset: image, link: {
+    workspace_id: 'workspace-1', local_asset_id: 'asset-1', status: 'active', provider_asset_id: 'deleted-provider',
+  }, providerGet: new BytePlusAssetsError('missing', { code: 'AssetNotFound', status: 404 }) });
+  assert.deepEqual(await stale.service.getTrust('workspace-1', 'asset-1'), { status: 'not_trusted' });
+  assert.equal(stale.getLink().status, 'failed');
+  assert.equal(stale.getLink().error.code, 'BYTEPLUS_ASSET_NOT_FOUND');
+})
 
 test('GET refreshes processing links to active or a canonical failed state', async () => {
   const active = fixture({ asset: image, link: {

@@ -202,7 +202,7 @@ export function createFolderRouteHandlers(deps: FolderRouteDeps = {}) {
           return folderNotFoundResponse()
         }
 
-        await sql`DELETE FROM asset_folders WHERE id = ${folderId}`
+        await sql`DELETE FROM asset_folders WHERE id::text = ${folderId}`
         return NextResponse.json({ success: true })
       } catch (err: any) {
         console.error('[folders] DELETE error:', err)

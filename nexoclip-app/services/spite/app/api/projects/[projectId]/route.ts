@@ -63,9 +63,9 @@ async function loadLaggingAuthoritativeReferrers({
   const laggingProjects = await sql`
     SELECT d.project_id
     FROM canvas_yjs_documents d
-    JOIN projects p ON p.id::text = d.project_id
+    JOIN projects p ON p.id::text = d.project_id::text
     WHERE p.userid = ${userId}
-      AND d.project_id <> ${projectId}
+      AND d.project_id::text <> ${projectId}::text
       AND d.projected_seq < d.durable_seq
   ` as Array<{ project_id: string }>
 
