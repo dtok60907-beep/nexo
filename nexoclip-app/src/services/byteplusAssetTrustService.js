@@ -30,10 +30,16 @@ const PROJECT_MISMATCH_FAILURE = {
   message: 'Trusted asset belongs to another BytePlus project. Recreate trust.',
 };
 const CLAIM_STALE_MS = 30_000;
+const SHARED_GROUP_NAME = 'NexoClip trusted assets';
+const SHARED_GROUP_DESCRIPTION = 'Shared NexoClip BytePlus asset group';
 
 function clientToken(workspaceId, assetId, operation, attemptId) {
   const attempt = operation === 'create-asset' ? `:${attemptId}` : '';
   return createHash('sha256').update(`byteplus-assets:v1:${workspaceId}:${assetId}:${operation}${attempt}`).digest('hex');
+}
+
+function sharedGroupClientToken(projectName) {
+  return createHash('sha256').update(`byteplus-assets:v1:${projectName}:create-group`).digest('hex');
 }
 
 function unavailableSourceError() {
@@ -127,6 +133,7 @@ export function createBytePlusAssetTrustService({
   async function startTrust(workspaceId, assetId) {
     const provider = assetsClientFactory({ env });
     const projectName = env.BYTEPLUS_PROJECT_NAME?.trim() || 'default';
+    const configuredGroupId = env.BYTEPLUS_ASSET_GROUP_ID?.trim() || null;
     const client = await pool.connect();
     let asset;
     let link;
@@ -211,12 +218,12 @@ export function createBytePlusAssetTrustService({
       inTransaction = false;
 
       const attemptId = link.attempt_id;
-      let groupId = link.group_id;
+      let groupId = link.group_id || configuredGroupId;
       if (!groupId) {
         groupId = requireProviderId(await provider.createAssetGroup({
-          name: asset.filename,
-          description: 'NexoClip workspace asset',
-          clientToken: clientToken(workspaceId, assetId, 'create-group'),
+          name: SHARED_GROUP_NAME,
+          description: SHARED_GROUP_DESCRIPTION,
+          clientToken: sharedGroupClientToken(projectName),
         }));
         link = await repository.updateBytePlusAssetLink(client, {
           workspaceId, localAssetId: assetId, groupId, status: 'processing', error: null,

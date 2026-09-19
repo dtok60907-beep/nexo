@@ -5,7 +5,7 @@ import { BytePlusAssetsError } from '../../src/providers/byteplusAssetsClient.js
 import { listWorkspaceAssets } from '../../src/services/assetService.js';
 import { createBytePlusAssetTrustService } from '../../src/services/byteplusAssetTrustService.js';
 
-function fixture({ asset, link, casLosesTo, providerGet, now = () => new Date('2026-09-16T12:00:00Z') } = {}) {
+function fixture({ asset, link, casLosesTo, providerGet, env = {}, now = () => new Date('2026-09-16T12:00:00Z') } = {}) {
   let current = link ? {
     project_name: 'project-x',
     attempt_id: '00000000-0000-4000-8000-000000000001',
@@ -108,7 +108,7 @@ function fixture({ asset, link, casLosesTo, providerGet, now = () => new Date('2
     },
     assetsClientFactory: () => provider,
     repository,
-    env: { BYTEPLUS_PROJECT_NAME: 'project-x' },
+    env: { BYTEPLUS_PROJECT_NAME: 'project-x', ...env },
     attemptIdFactory: (() => { let value = 0; return () => `00000000-0000-4000-8000-${String(++value).padStart(12, '0')}`; })(),
     now,
   });
@@ -126,7 +126,7 @@ test('starts image trust in the workspace with a short-lived source URL and safe
   assert.deepEqual(await service.startTrust('workspace-1', 'asset-1'), { status: 'processing' });
   assert.deepEqual(calls.downloads, [{ key: 'workspace-1/asset-1', expiresInSeconds: 300 }]);
   assert.deepEqual(calls.groups.map(({ clientToken, ...input }) => input), [{
-    name: 'portrait.png', description: 'NexoClip workspace asset',
+    name: 'NexoClip trusted assets', description: 'Shared NexoClip BytePlus asset group',
   }]);
   assert.deepEqual(calls.assets.map(({ clientToken, ...input }) => input), [{
     groupId: 'group-secret', url: 'https://objects.example/source.png?signature=secret', name: 'portrait.png',
@@ -140,6 +140,15 @@ test('starts image trust in the workspace with a short-lived source URL and safe
   assert.ok(commitIndex >= 0 && commitIndex < calls.queries.findIndex(({ text }) => text === 'PROVIDER create-group'), 'claim must commit before provider I/O');
   assert.equal(getLink().provider_asset_id, 'provider-asset-secret');
   assert.doesNotMatch(JSON.stringify(await service.getTrust('workspace-1', 'asset-1')), /secret|signature|group/i);
+});
+
+test('uses a configured shared BytePlus group without creating a group', async () => {
+  const shared = fixture({ asset: image, env: { BYTEPLUS_ASSET_GROUP_ID: 'shared-group' } });
+
+  await shared.service.startTrust('workspace-1', 'asset-1');
+
+  assert.deepEqual(shared.calls.groups, []);
+  assert.equal(shared.calls.assets[0].groupId, 'shared-group');
 });
 
 test('failed retry retains the group and rotates only the asset attempt token', async () => {
