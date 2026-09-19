@@ -713,6 +713,70 @@ test('generate/recover bulk cleanup clears pending markers via authoritative rea
   }])
 })
 
+test('asset delete preserves canonical workspace assets when unified delete returns 404', async () => {
+  let legacyDeleteRan = false
+  const handlers = createAssetRouteHandlers({
+    getDb: () => (async (strings: TemplateStringsArray) => {
+      const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id::text = g.project_id::text where p.userid = ? and g.id::text = ? limit 1')) {
+        return [{
+          id: 'asset-1',
+          project_id: PROJECT_ID,
+          r2_url: '/api/assets/978ba173-d6ce-4c3e-8830-83cd4ca66092/download',
+        }]
+      }
+      legacyDeleteRan = true
+      throw new Error(`Legacy cleanup should not run: ${normalized}`)
+    }) as any,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    fetchFn: async () => new Response(JSON.stringify({ error: 'Asset not found' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }),
+    getR2Client: () => ({ send: async () => { throw new Error('R2 delete should not run') } }) as any,
+    env: { NEXOCLIP_INTERNAL_URL: 'http://nexoclip-app:3000' },
+  })
+
+  const response = await handlers.DELETE(makeRequest('http://spite.local/api/assets/asset-1', {
+    method: 'DELETE',
+  }) as any, { params: Promise.resolve({ assetId: 'asset-1' }) } as any)
+
+  assert.equal(response.status, 404)
+  assert.equal(legacyDeleteRan, false)
+})
+
+test('asset delete keeps legacy fallback for non-workspace assets', async () => {
+  let r2Deleted = false
+  const handlers = createAssetRouteHandlers({
+    getDb: () => (async (strings: TemplateStringsArray) => {
+      const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.includes('from generation_history')) {
+        return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: '/uploads/legacy.png' }]
+      }
+      if (normalized.startsWith('delete from asset_folder_items')) return []
+      if (normalized.includes('from canvas_yjs_documents')) return []
+      if (normalized.startsWith('delete from generation_history')) return []
+      throw new Error(`Unhandled SQL in legacy asset delete test: ${normalized}`)
+    }) as any,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    fetchFn: async () => new Response(JSON.stringify({ error: 'Asset not found' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }),
+    getR2Client: () => ({ send: async () => { r2Deleted = true } }) as any,
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: { nodes: [], edges: [], scenes: [] } }),
+    }) as any,
+  })
+
+  const response = await handlers.DELETE(makeRequest('http://spite.local/api/assets/asset-1', {
+    method: 'DELETE',
+  }) as any, { params: Promise.resolve({ assetId: 'asset-1' }) } as any)
+
+  assert.equal(response.status, 200)
+  assert.equal(r2Deleted, true)
+})
+
 test('asset delete consults authoritative document when projection lags before removing media', async () => {
   const exportCalls: unknown[] = []
   const handlers = createAssetRouteHandlers({
