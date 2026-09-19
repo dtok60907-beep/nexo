@@ -32,9 +32,12 @@ export function workspaceAssetReferencePatches(projection: CanvasProjection, ass
     const data = node.data && typeof node.data === 'object' && !Array.isArray(node.data)
       ? node.data as Record<string, unknown>
       : {}
+    const identityMatches = data.workspaceAssetId === assetId || data.assetId === assetId
     const unset = ['workspaceAssetId', 'assetId']
       .filter(key => data[key] === assetId)
-      .concat(['outputUrl', 'thumbnail', 'url'].filter(key => isCanonicalAssetUrl(data[key], assetId)))
+      .concat(['outputUrl', 'thumbnail', 'url'].filter(key =>
+        identityMatches ? data[key] !== undefined : isCanonicalAssetUrl(data[key], assetId),
+      ))
     const mentions = removeMentionIdentity(data.mentions, assetId)
     const mentionsChanged = JSON.stringify(mentions) !== JSON.stringify(data.mentions)
     if (unset.length === 0 && !mentionsChanged) return []

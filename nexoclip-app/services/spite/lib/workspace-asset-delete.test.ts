@@ -105,6 +105,17 @@ test('workspace folder cleanup compares UUID identities safely', () => {
   assert.match(assetRouteSource, /workspace_asset_id::text = \$\{assetId\}/)
 })
 
+test('reference patching clears legacy media URLs when the node has the exact canonical identity', () => {
+  const patches = workspaceAssetReferencePatches({ nodes: [
+    { id: 'target', data: { workspaceAssetId: 'asset-1', outputUrl: '/spite/api/r2-image/uploads/legacy.png', thumbnail: '/spite/api/r2-image/uploads/legacy-thumb.png' } },
+    { id: 'other', data: { workspaceAssetId: 'asset-2', outputUrl: '/spite/api/r2-image/uploads/legacy.png' } },
+  ] } as any, 'asset-1')
+
+  assert.equal(patches.length, 1)
+  assert.equal(patches[0].nodeId, 'target')
+  assert.deepEqual(patches[0].unset.sort(), ['outputUrl', 'thumbnail', 'workspaceAssetId'])
+})
+
 test('reference patching removes only exact canonical identities and mention selections', () => {
   const patches = workspaceAssetReferencePatches({ nodes: [
     { id: 'target', data: { workspaceAssetId: 'asset-1', thumbnail: '/api/assets/asset-1/download', mentions: [{ name: 'A', selectedWorkspaceAssetIds: ['asset-1', 'asset-2'] }] } },

@@ -41,7 +41,8 @@ test('deletes provider, storage, Canvas references, mapping, outputs, and asset'
     'Canvas cleanup must succeed before destructive storage deletion',
   );
   const mappingDelete = f.calls.find(c => c.text?.startsWith('DELETE FROM byteplus_asset_links'));
-  assert.deepEqual(mappingDelete.values, ['workspace-1', 'asset-1', 'provider-1']);
+  assert.match(mappingDelete.text, /attempt_id = \$4/);
+  assert.deepEqual(mappingDelete.values, ['workspace-1', 'asset-1', 'provider-1', 'attempt-1']);
   assert.ok(f.calls.find(c => c.text?.startsWith('DELETE FROM assets')));
 });
 

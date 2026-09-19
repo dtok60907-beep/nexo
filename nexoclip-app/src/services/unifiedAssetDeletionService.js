@@ -87,8 +87,9 @@ export async function deleteTrustedWorkspaceAsset({
     if (asset.provider_asset_id) {
       const deletedLink = await finalClient.query(
         `DELETE FROM byteplus_asset_links
-         WHERE workspace_id = $1 AND local_asset_id = $2 AND provider_asset_id = $3`,
-        [workspaceId, localAssetId, asset.provider_asset_id],
+         WHERE workspace_id = $1 AND local_asset_id = $2
+           AND provider_asset_id = $3 AND attempt_id = $4`,
+        [workspaceId, localAssetId, asset.provider_asset_id, asset.attempt_id],
       );
       if (deletedLink.rowCount !== 1) {
         throw failure('Asset Trust changed during deletion.', { code: 'ASSET_TRUST_CHANGED', status: 409, retryable: true });

@@ -99,18 +99,19 @@ test('status refresh compare-and-set scopes the expected status and provider ass
   assert.deepEqual(calls[0].values, ['workspace-1', 'asset-1', 'processing', 'provider-1', 'active', null, null]);
 });
 
-test('delete removes only the trusted mapping identified by workspace, asset, and provider IDs', async () => {
+test('delete removes only the snapshotted trusted provider attempt', async () => {
   const { deleteBytePlusAssetLink } = await repository();
   const calls = [];
   const client = { async query(text, values) { calls.push({ text, values }); return { rowCount: 1 }; } };
 
   assert.equal(await deleteBytePlusAssetLink(client, {
-    workspaceId: 'workspace-1', localAssetId: 'asset-1', providerAssetId: 'provider-1',
+    workspaceId: 'workspace-1', localAssetId: 'asset-1', providerAssetId: 'provider-1', attemptId: 'attempt-1',
   }), true);
   assert.match(calls[0].text, /DELETE FROM byteplus_asset_links/);
   assert.match(calls[0].text, /WHERE workspace_id = \$1 AND local_asset_id = \$2/);
   assert.match(calls[0].text, /AND provider_asset_id = \$3/);
-  assert.deepEqual(calls[0].values, ['workspace-1', 'asset-1', 'provider-1']);
+  assert.match(calls[0].text, /AND attempt_id = \$4/);
+  assert.deepEqual(calls[0].values, ['workspace-1', 'asset-1', 'provider-1', 'attempt-1']);
 });
 
 test('stale marking changes only the matching provider attempt and reports whether it changed', async () => {

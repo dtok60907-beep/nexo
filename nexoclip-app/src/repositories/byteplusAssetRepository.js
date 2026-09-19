@@ -57,13 +57,13 @@ export async function compareAndSetBytePlusAssetLinkStatus(client, {
 }
 
 export async function deleteBytePlusAssetLink(client, {
-  workspaceId, localAssetId, providerAssetId,
+  workspaceId, localAssetId, providerAssetId, attemptId,
 }) {
   const result = await client.query(
     `DELETE FROM byteplus_asset_links
      WHERE workspace_id = $1 AND local_asset_id = $2
-       AND provider_asset_id = $3`,
-    [workspaceId, localAssetId, providerAssetId],
+       AND provider_asset_id = $3 AND attempt_id = $4`,
+    [workspaceId, localAssetId, providerAssetId, attemptId],
   );
   return result.rowCount > 0;
 }
