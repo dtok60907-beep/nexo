@@ -193,10 +193,7 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
         }
 
         const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
-        if (!asset) {
-          if (!baseUrl) return NextResponse.json({ error: 'Workspace asset service is unavailable' }, { status: 503 })
-          return assetNotFoundResponse()
-        }
+        if (!asset) return assetNotFoundResponse()
 
         const removedRows = await sql`
           DELETE FROM asset_folder_items WHERE asset_id = ${assetId}
