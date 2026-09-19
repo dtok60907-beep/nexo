@@ -4,6 +4,7 @@
 services:
   caddy:
     image: caddy:2.10-alpine
+    mem_limit: 128m
     ports:
       - "80:80"
     volumes:
@@ -21,6 +22,7 @@ services:
 
   nexoclip-postgres:
     image: postgres:16-alpine
+    mem_limit: 512m
     container_name: nexoclip-postgres
     environment:
       POSTGRES_DB: nexoclip
@@ -37,6 +39,7 @@ services:
 
   nexoclip-redis:
     image: redis:7-alpine
+    mem_limit: 256m
     container_name: nexoclip-redis
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     volumes:
@@ -97,6 +100,8 @@ services:
     restart: "no"
 
   ai-clip:
+    profiles: ["ai-clip"]
+    mem_limit: 1g
     build:
       context: ./nexoclip-app/services/ai-clip
     environment:
@@ -127,6 +132,7 @@ services:
     restart: "no"
 
   nexoclip-image-worker:
+    mem_limit: 512m
     networks:
       - default
       - ai-ugc
@@ -155,7 +161,7 @@ services:
       R2_BUCKET: ${R2_BUCKET_NAME:-}
       R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
-      IMAGE_WORKER_CONCURRENCY: ${IMAGE_WORKER_CONCURRENCY:-3}
+      IMAGE_WORKER_CONCURRENCY: ${IMAGE_WORKER_CONCURRENCY:-1}
     volumes:
       - nexoclip-assets:/data
     depends_on:
@@ -170,6 +176,7 @@ services:
     restart: unless-stopped
 
   nexoclip-video-worker:
+    mem_limit: 512m
     networks:
       - default
       - ai-ugc
@@ -202,7 +209,7 @@ services:
       R2_BUCKET: ${R2_BUCKET_NAME:-}
       R2_BUCKET_NAME: ${R2_BUCKET_NAME:-}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
-      VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-3}
+      VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-1}
     volumes:
       - nexoclip-assets:/data
     depends_on:
@@ -218,6 +225,7 @@ services:
 
 
   spite:
+    mem_limit: 768m
     build:
       context: ./nexoclip-app/services/spite
       target: web
@@ -257,6 +265,7 @@ services:
     restart: unless-stopped
 
   spite-realtime:
+    mem_limit: 384m
     build:
       context: ./nexoclip-app/services/spite
       target: realtime
@@ -288,6 +297,7 @@ services:
     restart: unless-stopped
 
   nexoclip-app:
+    mem_limit: 768m
     build:
       context: .
       dockerfile: nexoclip-app/Dockerfile
@@ -344,8 +354,6 @@ services:
       nexoclip-migrate:
         condition: service_completed_successfully
       nexoclip-redis:
-        condition: service_healthy
-      ai-clip:
         condition: service_healthy
     restart: unless-stopped
 
