@@ -719,7 +719,7 @@ test('asset delete consults authoritative document when projection lags before r
     getDb: () => (async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
 
-      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id::text = g.project_id where p.userid = ? and g.id::text = ? limit 1')) {
+      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id::text = g.project_id::text where p.userid = ? and g.id::text = ? limit 1')) {
         return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: '/uploads/generated.png' }]
       }
 

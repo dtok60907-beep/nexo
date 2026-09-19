@@ -13,7 +13,7 @@ test('legacy generation asset ownership casts UUID project ids to the text forei
     source.indexOf('export async function countOwnedGenerationAssetsForProject'),
   )
 
-  assert.match(query, /JOIN projects p ON p\.id::text = g\.project_id/)
+  assert.match(query, /JOIN projects p ON p\.id::text = g\.project_id::text/)
   assert.match(query, /g\.id::text =/)
   assert.doesNotMatch(query, /JOIN projects p ON p\.id = g\.project_id/)
 })

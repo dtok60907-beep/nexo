@@ -49,7 +49,7 @@ export async function findOwnedGenerationAsset(sql: Sql, userId: string, assetId
   const rows = await sql`
     SELECT g.id, g.project_id, g.r2_url
     FROM generation_history g
-    JOIN projects p ON p.id::text = g.project_id
+    JOIN projects p ON p.id::text = g.project_id::text
     WHERE p.userid = ${userId} AND g.id::text = ${assetId}
     LIMIT 1
   ` as Array<{ id: string; project_id: string; r2_url: string | null }>
@@ -83,7 +83,7 @@ export async function countOwnedGenerationAssetsForProject(
   const rows = await sql`
     SELECT count(*)::int AS owned_count
     FROM generation_history g
-    JOIN projects p ON p.id::text = g.project_id
+    JOIN projects p ON p.id::text = g.project_id::text
     WHERE p.userid = ${userId}
       AND g.project_id = ${projectId}
       AND g.id = ANY(${assetIds}::text[])
