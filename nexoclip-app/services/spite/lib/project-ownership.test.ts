@@ -180,6 +180,34 @@ function createFakeSqlFixture() {
   return { sql: sql as any, seedProject, seedAsset, projects }
 }
 
+test('project deletion compares UUID Yjs project ids safely', async () => {
+  const queries: string[] = []
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(' ? ')
+    queries.push(query)
+    if (query.includes('SELECT 1') && query.includes('FROM projects')) return [{ ok: 1 }]
+    if (query.includes('SELECT id, r2_url') && query.includes('FROM generation_history')) {
+      return [{ id: 'asset-1', r2_url: 'https://example.com/test.png' }]
+    }
+    return []
+  }) as any
+  const handlers = createProjectRouteHandlers({
+    getDb: () => sql,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    createInternalRealtimeClient: () => ({}) as any,
+  })
+
+  const response = await handlers.DELETE(
+    makeRequest('http://spite.local/api/projects/id', { method: 'DELETE' }) as any,
+    { params: Promise.resolve({ projectId: OWNER_PROJECT_ID }) } as any,
+  )
+
+  assert.equal(response.status, 200)
+  const query = queries.find(value => value.includes('FROM canvas_yjs_documents')) ?? ''
+  assert.match(query, /p\.id::text = d\.project_id::text/)
+  assert.match(query, /d\.project_id::text <>/)
+})
+
 test('projects POST creates rows for the trusted user, not a browser-supplied userId', async () => {
   const fixture = createFakeSqlFixture()
   const handlers = createProjectsRouteHandlers({
