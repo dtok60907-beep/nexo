@@ -36,6 +36,10 @@ test('deletes provider, storage, Canvas references, mapping, outputs, and asset'
   assert.deepEqual(f.calls.find(c => c.text === 'PROVIDER').input, { assetId: 'provider-1', projectName: 'project-x' });
   assert.ok(f.calls.find(c => c.text === 'STORAGE'));
   assert.ok(f.calls.find(c => c.text === 'CANVAS'));
+  assert.ok(
+    f.calls.findIndex(c => c.text === 'CANVAS') < f.calls.findIndex(c => c.text === 'STORAGE'),
+    'Canvas cleanup must succeed before destructive storage deletion',
+  );
   const mappingDelete = f.calls.find(c => c.text?.startsWith('DELETE FROM byteplus_asset_links'));
   assert.deepEqual(mappingDelete.values, ['workspace-1', 'asset-1', 'provider-1']);
   assert.ok(f.calls.find(c => c.text?.startsWith('DELETE FROM assets')));

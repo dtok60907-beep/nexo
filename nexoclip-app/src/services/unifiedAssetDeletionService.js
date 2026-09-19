@@ -64,20 +64,20 @@ export async function deleteTrustedWorkspaceAsset({
     }
   }
 
-  try {
-    await storage.delete(asset.storage_key);
-  } catch {
-    throw failure('Asset storage deletion failed.', {
-      code: 'ASSET_STORAGE_DELETE_FAILED', status: 503, retryable: true,
-    });
-  }
-
   const canvas = await cleanupCanvasReferences({
     workspaceId, localAssetId, canonicalUrl: `/api/assets/${encodeURIComponent(localAssetId)}/download`,
   }).catch(() => ({ complete: false }));
   if (!canvas?.complete) {
     throw failure('Canvas reference cleanup is incomplete.', {
       code: 'CANVAS_REFERENCE_CLEANUP_INCOMPLETE', status: 503, retryable: true,
+    });
+  }
+
+  try {
+    await storage.delete(asset.storage_key);
+  } catch {
+    throw failure('Asset storage deletion failed.', {
+      code: 'ASSET_STORAGE_DELETE_FAILED', status: 503, retryable: true,
     });
   }
 
