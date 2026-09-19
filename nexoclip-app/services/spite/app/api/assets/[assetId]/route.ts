@@ -184,12 +184,10 @@ export function createAssetRouteHandlers(deps: AssetRouteDeps = {}) {
             method: 'DELETE',
             headers: { cookie: request.headers.get('cookie') ?? '' },
           })
-          if (upstream.status !== 404) {
-            return new NextResponse(await upstream.text(), {
-              status: upstream.status,
-              headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
-            })
-          }
+          return new NextResponse(await upstream.text(), {
+            status: upstream.status,
+            headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/json' },
+          })
         }
 
         const asset = await findOwnedGenerationAsset(sql, user.id, assetId)
