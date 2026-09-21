@@ -30,6 +30,34 @@ test('mentions resolve through canonical workspace asset IDs rather than legacy 
   assert.deepEqual(result.refGroups[0].workspaceAssetIds, ['workspace-nathan'])
 })
 
+test('canonical mention metadata compiles even before the folder cache refreshes', () => {
+  const result = compileMentionsForModel(
+    '@Nathan walks into frame',
+    [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['legacy-nathan'], selectedWorkspaceAssetIds: ['workspace-nathan'] }],
+    [],
+    model,
+  )
+  assert.deepEqual(result.refGroups[0].urls, ['/api/assets/workspace-nathan/download'])
+  assert.deepEqual(result.refGroups[0].workspaceAssetIds, ['workspace-nathan'])
+  assert.doesNotMatch(result.prompt, /@Nathan/)
+})
+
+test('partial canonical mention metadata does not silently omit selected assets', () => {
+  const result = compileMentionsForModel(
+    '@Nathan walks into frame',
+    [{
+      folderId: 'nathan',
+      name: 'Nathan',
+      selectedAssetIds: ['legacy-front', 'legacy-side'],
+      selectedWorkspaceAssetIds: ['workspace-front'],
+    }],
+    [],
+    model,
+  )
+  assert.deepEqual(result.needsCanonicalImport, ['Nathan'])
+  assert.deepEqual(result.refGroups, [])
+})
+
 test('legacy-only mentions report the folder that needs canonical import', () => {
   const result = compileMentionsForModel(
     '@Buratna walks into frame',

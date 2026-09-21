@@ -1,7 +1,7 @@
 # Collaboration Prompt Persistence and Mention Integrity
 
 **Date:** 2026-09-21  
-**Status:** Draft for review
+**Status:** Implemented; browser refresh validation pending
 
 ## Goal
 
@@ -86,7 +86,7 @@ When `MentionTextarea` emits a change:
 1. update the local display immediately;
 2. write `text` and `mentions` in one Yjs transaction through `patchNodeData`;
 3. mark that state as pending;
-4. clear pending only after the realtime runtime reports the same state in its shared projection and persistence reaches `PERSISTED`.
+4. clear the local pending key only after the shared projection echoes that exact text-and-mentions key; generation separately verifies persistence through runtime status and a server-side durable-state comparison.
 
 A metadata-only mention update must be treated as a real state change even when the serialized text is unchanged.
 
@@ -111,9 +111,9 @@ The comparison must include both `text` and normalized `mentions`, not text alon
 The prompt editor/generation node must expose these states:
 
 ```text
-SYNCED/PENDING → local changes exist or initial sync is incomplete
+SYNCED         → connected with no known write in flight
 PERSISTING     → update is being written
-PERSISTED      → current local state is durable
+PERSISTED      → the originating connection received a durable ACK
 DEGRADED       → persistence failed or connection lost
 READ_ONLY      → mutations are blocked
 ```
@@ -125,10 +125,11 @@ The UI may use a compact indicator, but Generate must use the status programmati
 Before generation:
 
 1. identify the connected prompt node;
-2. wait for or require `PERSISTED` for that node's current state;
-3. obtain the latest authoritative document/node projection;
-4. compile references from that projection's `text` and `mentions`;
-5. submit only that exact prompt/reference pair.
+2. block while status is `PERSISTING`, `DEGRADED`, or `READ_ONLY`;
+3. send a deterministic key for the raw prompt text and normalized mention metadata;
+4. flush/export the latest authoritative document on the server;
+5. compare the submitted key with the connected durable Prompt node;
+6. submit only when the keys match; otherwise return `PROMPT_STATE_NOT_PERSISTED` before provider work.
 
 If the state changes during the handshake, abort and ask the user to retry rather than mixing versions.
 
@@ -152,7 +153,7 @@ Add regression coverage for:
 4. Refresh restores the latest text and all mention metadata.
 5. Reconnect/hydration does not turn a durable mention chip into plain text.
 6. A prompt with a local pending edit cannot generate.
-7. Generation waits for `PERSISTED` and compiles the latest authoritative text/mentions.
+7. Generation blocks while persistence is in flight and the server rejects any prompt-state key that differs from the latest durable text/mentions.
 8. Generation is rejected while persistence is `DEGRADED` or `READ_ONLY`.
 9. Two collaborators converge on identical `text` and `mentions` after editing.
 10. A generated request contains the expected reference URLs for every durable mention.
@@ -180,3 +181,21 @@ It does not change:
 - Generation uses the same durable prompt and mention state the user sees.
 - A failed/degraded persistence state is visible and prevents paid generation.
 - Existing canonical asset and Trust validation remains unchanged.
+
+## Implemented Changes
+
+- Prompt drafts remain pending after blur until the exact shared state echoes them.
+- Local Yjs mutations, including undo/redo, immediately mark the canvas `PERSISTING` before the server status round trip.
+- Pending local update counts prevent an older ACK from marking a newer draft persisted; successful reconnect resets transaction counting because state-vector sync may send one or zero updates.
+- The local prompt key is retained through the durable ACK, not merely the optimistic local Yjs echo.
+- A settled divergent CRDT result is surfaced as a conflict and replaces the local-only view before generation.
+- Refresh/navigation warns while state is `PERSISTING`, `DEGRADED`, or `READ_ONLY`.
+- `selectedWorkspaceAssetIds` participate in mention-state identity.
+- Image and video generation use freshly resolved prompt mention metadata rather than a stale render closure.
+- Prompt editing is disabled in `READ_ONLY` state.
+- Generation controls are disabled during `PERSISTING`, `DEGRADED`, and `READ_ONLY` states.
+- Generation requests include `promptStateKey`.
+- New mention chips persist canonical `selectedWorkspaceAssetIds`; same-count folder metadata refreshes emit metadata-only prompt updates.
+- Complete canonical mention IDs compile without waiting for the local folder cache to refresh; partial/legacy-only identity fails safely instead of omitting selected assets.
+- The submit route flushes/exports authoritative realtime state and returns HTTP 409 with `PROMPT_STATE_NOT_PERSISTED` when the connected Prompt node is missing or the submitted key does not match.
+- Seedance submission also verifies every durable mention has complete canonical identity and every mentioned `workspaceAssetId` is present in the submitted reference set before provider work.

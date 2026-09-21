@@ -10,7 +10,12 @@ import { MentionTextarea, type Mention, type MentionTextareaRef } from '../menti
 import { useProjectFolders } from '@/hooks/use-project-folders'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { createLocalStateSyncGuard } from '@/lib/local-state-sync'
-import { mentionStateKey, shouldApplyRemoteMentionState } from '@/lib/mention-state'
+import {
+  acknowledgePendingMentionState,
+  hasPersistedMentionConflict,
+  mentionStateKey,
+  shouldApplyRemoteMentionState,
+} from '@/lib/mention-state'
 import { withBasePath } from '@/lib/base-path'
 import { getOrCreateParticipantHint } from '@/lib/realtime/presence'
 
@@ -41,7 +46,8 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
   const [text, setText] = useState((data.text as string) || '')
   const [mentions, setMentions] = useState<Mention[]>((data.mentions as Mention[]) || [])
   const { folders, refresh: refreshFolders } = useProjectFolders(projectId)
-  const { patchNodeData } = useCanvasCollaboration()
+  const { patchNodeData, persistenceStatus } = useCanvasCollaboration()
+  const readOnly = persistenceStatus === 'READ_ONLY'
   // Drag-by-default UX: when `editing` is false, an invisible overlay
   // sits on top of the text and absorbs single-clicks so React Flow
   // treats them as a node drag. Double-click anywhere on the overlay
@@ -55,15 +61,32 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
   const editorRef = useRef<MentionTextareaRef>(null)
   const syncGuardRef = useRef(createLocalStateSyncGuard())
   const pendingLocalStateKeyRef = useRef<string | null>(null)
+  const unpersistedLocalStateKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     const incomingText = (data.text as string) || ''
     const incomingMentions = (data.mentions as Mention[]) || []
     const incomingStateKey = mentionStateKey(incomingText, incomingMentions)
-    if (!editing || pendingLocalStateKeyRef.current === incomingStateKey) {
-      pendingLocalStateKeyRef.current = null
+    // Keep a local draft pending until the shared Yjs projection echoes the
+    // exact text + mention metadata. Closing the editor is not an ACK: clearing
+    // here used to let the previous projection overwrite the draft on blur,
+    // which then became the state restored after refresh.
+    pendingLocalStateKeyRef.current = acknowledgePendingMentionState(
+      pendingLocalStateKeyRef.current,
+      incomingStateKey,
+    )
+    const persistedConflict = hasPersistedMentionConflict(
+      unpersistedLocalStateKeyRef.current,
+      incomingStateKey,
+      persistenceStatus,
+    )
+    if (
+      unpersistedLocalStateKeyRef.current === incomingStateKey
+      && (persistenceStatus === 'PERSISTED' || persistenceStatus === 'SYNCED')
+    ) {
+      unpersistedLocalStateKeyRef.current = null
     }
-    if (!shouldApplyRemoteMentionState({
+    if (!persistedConflict && !shouldApplyRemoteMentionState({
       editing,
       pendingLocalStateKey: pendingLocalStateKeyRef.current,
       localText: text,
@@ -72,20 +95,32 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
       incomingMentions,
     })) return
 
+    if (persistedConflict) {
+      pendingLocalStateKeyRef.current = null
+      unpersistedLocalStateKeyRef.current = null
+      setEditing(false)
+      setEditorLockError('Prompt changed concurrently. The latest saved version is shown; review it before generating.')
+    }
     const finishSync = syncGuardRef.current.beginPropSync()
     setText(incomingText)
     setMentions(incomingMentions)
     queueMicrotask(finishSync)
-  }, [data.text, data.mentions, editing, text, mentions])
+  }, [data.text, data.mentions, editing, mentions, persistenceStatus, text])
 
   const handleChange = useCallback((nextText: string, nextMentions: Mention[]) => {
+    if (readOnly) {
+      setEditorLockError('Canvas is read-only. Reconnect before editing.')
+      return
+    }
     syncGuardRef.current.beginUserEdit()
     setText(nextText)
     setMentions(nextMentions)
-    pendingLocalStateKeyRef.current = mentionStateKey(nextText, nextMentions)
+    const nextStateKey = mentionStateKey(nextText, nextMentions)
+    pendingLocalStateKeyRef.current = nextStateKey
+    unpersistedLocalStateKeyRef.current = nextStateKey
     if (!syncGuardRef.current.allowsPersistence()) return
     patchNodeData(id, { text: nextText, mentions: nextMentions })
-  }, [id, patchNodeData])
+  }, [id, patchNodeData, readOnly])
 
   const participantIdRef = useRef<string | null>(null)
   const sendEditorLock = useCallback(async (action: 'claim' | 'heartbeat' | 'release') => {
@@ -135,6 +170,10 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
   }, [editing])
 
   const enterEdit = async () => {
+    if (readOnly) {
+      setEditorLockError('Canvas is read-only. Reconnect before editing.')
+      return
+    }
     if (editing || claimingEditorLock) return
     setClaimingEditorLock(true)
     setEditorLockError(null)
@@ -195,6 +234,7 @@ function PromptNodeImpl({ id, data, selected }: NodeProps) {
           folders={folders}
           placeholder="Enter your prompt — type @ to reference a folder…"
           className="nodrag w-full bg-transparent resize-none outline-none text-[13px] text-foreground placeholder:text-muted-foreground/40 leading-relaxed p-4 min-h-[160px] cursor-text"
+          disabled={readOnly}
           rows={6}
         />
 

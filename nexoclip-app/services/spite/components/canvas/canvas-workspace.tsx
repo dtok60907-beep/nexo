@@ -5,6 +5,7 @@ import { uploadedMediaLabel } from '@/lib/canvas-media-label'
 import {
   createInvocationTimeRuntimeControls,
   getCanvasRuntimeCapabilities,
+  shouldWarnBeforeCanvasUnload,
   type CanvasRuntimeControls,
 } from '@/lib/canvas-runtime-ui'
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
@@ -289,6 +290,16 @@ function CanvasInner({ projectId }: { projectId: string }) {
   const { allowDocumentMutation } = getCanvasRuntimeCapabilities(persistenceStatus)
   const readOnly = !allowDocumentMutation
   const runtimeStatusRef = useRef(persistenceStatus)
+
+  useEffect(() => {
+    if (!shouldWarnBeforeCanvasUnload(persistenceStatus)) return
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warnBeforeUnload)
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
+  }, [persistenceStatus])
   runtimeStatusRef.current = persistenceStatus
   const runtimeControlsRef = useRef<CanvasRuntimeControls>({
     commands: realtime.commands,

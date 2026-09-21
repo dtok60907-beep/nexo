@@ -1,7 +1,59 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { captureCaretOffset, restoreCaretFromOffset } from '../components/canvas/mention-textarea'
+import {
+  captureCaretOffset,
+  mentionFoldersStateKey,
+  restoreCaretFromOffset,
+  shouldPersistRenderedMentionState,
+  workspaceAssetIdsForSelection,
+} from '../components/canvas/mention-textarea'
+
+test('new mention chips retain canonical workspace asset IDs for the selected legacy items', () => {
+  const folder = {
+    id: 'folder-1',
+    name: 'Nathan',
+    type: 'character' as const,
+    assets: [
+      { id: 'legacy-front', workspaceAssetId: 'asset-front', r2_url: '/front.png', type: 'image' as const },
+      { id: 'legacy-side', workspaceAssetId: 'asset-side', r2_url: '/side.png', type: 'image' as const },
+      { id: 'legacy-missing', r2_url: '/missing.png', type: 'image' as const },
+    ],
+  }
+
+  assert.deepEqual(
+    workspaceAssetIdsForSelection(folder, new Set(['legacy-front', 'legacy-missing'])),
+    ['asset-front'],
+  )
+})
+
+test('derived canonical chip metadata is persisted even when serialized text is unchanged', () => {
+  assert.equal(shouldPersistRenderedMentionState(
+    'Use @Nathan',
+    [{ folderId: 'folder-1', name: 'Nathan', selectedAssetIds: ['legacy-front'] }],
+    'Use @Nathan',
+    [{
+      folderId: 'folder-1',
+      name: 'Nathan',
+      selectedAssetIds: ['legacy-front'],
+      selectedWorkspaceAssetIds: ['asset-front'],
+    }],
+  ), true)
+})
+
+test('folder state identity changes when canonical asset metadata changes at the same length', () => {
+  const folder = {
+    id: 'folder-1',
+    name: 'Nathan',
+    type: 'character' as const,
+    assets: [{ id: 'legacy-front', r2_url: '/front.png', type: 'image' as const }],
+  }
+
+  assert.notEqual(
+    mentionFoldersStateKey([folder]),
+    mentionFoldersStateKey([{ ...folder, assets: [{ ...folder.assets[0], workspaceAssetId: 'asset-front' }] }]),
+  )
+})
 
 let JSDOM: any
 try {

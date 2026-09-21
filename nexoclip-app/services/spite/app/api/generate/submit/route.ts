@@ -8,6 +8,8 @@ import {
 import { createQueuedGenerationPatch } from '@/lib/durable-generation'
 import { getModelById } from '@/lib/fal-models'
 import { getAuthenticatedUser } from '@/lib/main-session'
+import { mentionStateKey, type PersistedMention } from '@/lib/mention-state'
+import type { CanvasProjection } from '@/lib/realtime/document'
 import {
   assetNotFoundResponse,
   projectNotFoundResponse,
@@ -59,6 +61,7 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
         : modelId
 
       const realtime = createRealtimeClient()
+      let durablePromptState: DurablePromptState | null = null
       if (!mobile) {
         const document = await realtime.exportDocument({ userId: user.id, projectId })
         const node = document.projection.nodes.find((candidate) => candidate.id === nodeId)
@@ -66,9 +69,32 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
         if (typeof node.data.generationId === 'string' && ['queued', 'processing', 'running'].includes(String(node.data.generationStatus))) {
           return NextResponse.json({ error: 'This node already has an active generation' }, { status: 409 })
         }
+
+        durablePromptState = resolveDurablePromptState(document.projection, nodeId)
+        if (!durablePromptState || body.promptStateKey !== durablePromptState.stateKey) {
+          return NextResponse.json({
+            error: 'Prompt changed locally but is not persisted yet. Please wait for it to finish saving and try again.',
+            code: 'PROMPT_STATE_NOT_PERSISTED',
+          }, { status: 409 })
+        }
       }
 
       const references = collectReferences(body)
+      if (
+        durablePromptState
+        && isBytePlusSeedance(model)
+        && (
+          durablePromptState.hasIncompleteMentionAssets
+          || !durablePromptState.workspaceAssetIds.every((assetId) =>
+            references.includes(`/api/assets/${encodeURIComponent(assetId)}/download`),
+          )
+        )
+      ) {
+        return NextResponse.json({
+          error: 'Prompt mention references changed or are not persisted yet. Please wait for saving to finish and try again.',
+          code: 'PROMPT_STATE_NOT_PERSISTED',
+        }, { status: 409 })
+      }
       const legacyReferences = references.filter(isLegacyCanvasReference)
       if (legacyReferences.length && !(await projectOwnsLegacyReferences(sql, projectId, legacyReferences))) {
         return assetNotFoundResponse()
@@ -106,6 +132,59 @@ export function createGenerateSubmitHandler(deps: GenerateSubmitDeps = {}) {
       return NextResponse.json({ error: error?.message || 'Generation failed' }, { status: Number(error?.status) || 500 })
     }
   }
+}
+
+type DurablePromptState = {
+  stateKey: string
+  workspaceAssetIds: string[]
+  hasIncompleteMentionAssets: boolean
+}
+
+function resolveDurablePromptState(
+  projection: CanvasProjection,
+  generationNodeId: string,
+): DurablePromptState | null {
+  const promptEdge = projection.edges
+    .filter((edge) => edge.target === generationNodeId && edge.targetHandle === 'prompt-in')
+    .sort((left, right) => left.id.localeCompare(right.id))[0]
+  const promptNode = promptEdge
+    ? projection.nodes.find((node) => node.id === promptEdge.source && node.type === 'prompt')
+    : undefined
+  if (!promptNode) return null
+
+  const mentions = normalizePersistedMentions(promptNode.data.mentions)
+  const workspaceAssetIds = [...new Set(mentions.flatMap((mention) => mention.selectedWorkspaceAssetIds ?? []))]
+  const hasIncompleteMentionAssets = mentions.some((mention) => {
+    const legacyCount = new Set(mention.selectedAssetIds).size
+    const canonicalCount = new Set(mention.selectedWorkspaceAssetIds ?? []).size
+    return canonicalCount === 0 || (legacyCount > 0 && canonicalCount !== legacyCount)
+  })
+  return {
+    stateKey: mentionStateKey(String(promptNode.data.text ?? '').trim(), mentions),
+    workspaceAssetIds,
+    hasIncompleteMentionAssets,
+  }
+}
+
+function normalizePersistedMentions(value: unknown): PersistedMention[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const mention = entry as Record<string, unknown>
+    if (typeof mention.folderId !== 'string' || typeof mention.name !== 'string') return []
+    const selectedAssetIds = Array.isArray(mention.selectedAssetIds)
+      ? mention.selectedAssetIds.filter((id): id is string => typeof id === 'string')
+      : []
+    const selectedWorkspaceAssetIds = Array.isArray(mention.selectedWorkspaceAssetIds)
+      ? mention.selectedWorkspaceAssetIds.filter((id): id is string => typeof id === 'string')
+      : []
+    return [{
+      folderId: mention.folderId,
+      name: mention.name,
+      selectedAssetIds,
+      ...(selectedWorkspaceAssetIds.length > 0 ? { selectedWorkspaceAssetIds } : {}),
+    }]
+  })
 }
 
 function mapLegacyParameters(body: Record<string, unknown>, kind: 'image' | 'video'): Record<string, unknown> {
