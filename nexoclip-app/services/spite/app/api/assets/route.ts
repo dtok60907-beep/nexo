@@ -98,7 +98,7 @@ export function createAssetsRouteHandlers(deps: AssetsRouteDeps = {}) {
                  g.refs,
                  g.created_at
           FROM generation_history g
-          JOIN projects p ON p.id::text = g.project_id
+          JOIN projects p ON p.id::text = g.project_id::text
           WHERE p.userid = ${user.id}
             AND (g.used_in_canvas = true OR g.expires_at > CURRENT_TIMESTAMP OR g.expires_at IS NULL)
           ORDER BY g.created_at DESC

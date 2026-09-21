@@ -436,7 +436,7 @@ export function LeftToolbar({
   useEffect(() => {
     const asset = selectedGenAsset
     const workspaceAssetId = workspaceAssetIdFromUrl(asset?.r2_url)
-    if (!asset || asset.type !== 'image' || asset.byteplus_trust || !workspaceAssetId) return
+    if (!asset || asset.type !== 'image' || !workspaceAssetId) return
     let cancelled = false
     requestBytePlusTrust(workspaceAssetId, 'GET')
       .then(state => { if (!cancelled) setTrustState(asset.id, state) })

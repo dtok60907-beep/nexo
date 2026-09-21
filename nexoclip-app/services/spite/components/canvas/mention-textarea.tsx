@@ -125,6 +125,34 @@ function listDomMentions(el: HTMLElement): Mention[] {
 // name — kept atomic so caret/arrow navigation treats the whole chip
 // as one unit. Selection counts are shown in the inline popover when
 // the user clicks the chip.
+export function workspaceAssetIdsForSelection(
+  folder: MentionFolder,
+  selectedAssetIds: Set<string>,
+): string[] {
+  return folder.assets
+    .filter((asset) => selectedAssetIds.has(asset.id) && asset.workspaceAssetId)
+    .map((asset) => asset.workspaceAssetId!)
+}
+
+export function shouldPersistRenderedMentionState(
+  incomingText: string,
+  incomingMentions: Mention[],
+  renderedText: string,
+  renderedMentions: Mention[],
+): boolean {
+  return mentionStateKey(incomingText, incomingMentions)
+    !== mentionStateKey(renderedText, renderedMentions)
+}
+
+export function mentionFoldersStateKey(folders: MentionFolder[]): string {
+  return JSON.stringify(folders.map((folder) => [
+    folder.id,
+    folder.name,
+    folder.type,
+    folder.assets.map((asset) => [asset.id, asset.workspaceAssetId ?? null]),
+  ]))
+}
+
 function makeChipElement(
   folder: MentionFolder | { id: string; name: string; type: FolderType },
   selectedAssetIds: string[],
@@ -421,16 +449,17 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
   // mounted, the user types and we emit onChange, but we don't sync back
   // from props — that would clobber the caret on every keystroke.
   const lastSerialized = useRef(mentionStateKey('', []))
-  const lastFoldersLen = useRef<number>(0)
+  const lastFoldersStateKey = useRef('')
   const incomingStateKey = mentionStateKey(value, mentions)
+  const foldersStateKey = mentionFoldersStateKey(folders)
   useEffect(() => {
     const el = editorRef.current
     if (!el) return
     // Skip only when both text and chip metadata match what this editor
     // emitted. A remote mention selection keeps the same serialized text,
     // so comparing text alone leaves the other guest with a plain @tag.
-    const foldersJustResolved = lastFoldersLen.current === 0 && folders.length > 0
-    if (incomingStateKey === lastSerialized.current && !foldersJustResolved) return
+    const foldersChanged = foldersStateKey !== lastFoldersStateKey.current
+    if (incomingStateKey === lastSerialized.current && !foldersChanged) return
 
     // Capture collapsed caret offset (if any) before we replace the DOM so
     // that editing guests don't lose their caret when a remote metadata-only
@@ -449,9 +478,14 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
     }
 
     renderInitial(el, value, mentions, folders)
+    const rendered = serializeEditor(el)
+    const renderedStateKey = mentionStateKey(rendered.text, rendered.mentions)
     setShowPlaceholder(el.textContent === '')
-    lastSerialized.current = incomingStateKey
-    lastFoldersLen.current = folders.length
+    lastSerialized.current = renderedStateKey
+    lastFoldersStateKey.current = foldersStateKey
+    if (!disabled && shouldPersistRenderedMentionState(value, mentions, rendered.text, rendered.mentions)) {
+      queueMicrotask(() => onChange(rendered.text, rendered.mentions))
+    }
 
     // Best-effort restore of a previously-captured caret position.
     if (capturedOffset !== null) {
@@ -461,7 +495,7 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
         // ignore — non-fatal
       }
     }
-  }, [incomingStateKey, folders.length])
+  }, [disabled, folders, foldersStateKey, incomingStateKey, mentions, onChange, value])
 
   // Read the current DOM state and bubble it up.
   const emit = useCallback(() => {
@@ -575,7 +609,12 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
       const parent = q.textNode.parentNode
       if (!parent) return
       // Split: text-before | chip | text-after (with leading space if missing)
-      const chip = makeChipElement(folder, Array.from(selected), document)
+      const chip = makeChipElement(
+        folder,
+        Array.from(selected),
+        document,
+        workspaceAssetIdsForSelection(folder, selected),
+      )
       const afterText = after.startsWith(' ') ? after : ` ${after}`
 
       parent.insertBefore(document.createTextNode(before), q.textNode)
@@ -589,7 +628,12 @@ export const MentionTextarea = forwardRef<MentionTextareaRef, Props>(function Me
     } else {
       // No @query (user clicked the dropdown without typing) — just append
       // at the end of the editor.
-      const chip = makeChipElement(folder, Array.from(selected), document)
+      const chip = makeChipElement(
+        folder,
+        Array.from(selected),
+        document,
+        workspaceAssetIdsForSelection(folder, selected),
+      )
       const space = document.createTextNode(' ')
       el.appendChild(chip)
       el.appendChild(space)

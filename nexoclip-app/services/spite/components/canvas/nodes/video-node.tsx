@@ -3,7 +3,7 @@
 import { withBasePath, withGenerationOutputBasePath } from '@/lib/base-path'
 import { Position, NodeProps, Handle, useReactFlow, useUpdateNodeInternals } from '@xyflow/react'
 import { useParams } from 'next/navigation'
-import { Play, CaretDown, SpeakerHigh, SpeakerSlash, TextT, Image as ImageIcon, FilmStrip, CircleNotch, X, Check, ArrowsClockwise, Minus, Plus } from '@phosphor-icons/react'
+import { Play, CaretDown, TextT, Image as ImageIcon, FilmStrip, CircleNotch, X, Check, ArrowsClockwise, Minus, Plus } from '@phosphor-icons/react'
 import { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
 import { NodeActionToolbar } from './node-toolbar'
@@ -22,6 +22,8 @@ import { ConnectedInputs } from '../connected-inputs'
 import { captureVideoThumbnail } from '@/lib/video-thumbnail'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { createLocalStateSyncGuard } from '@/lib/local-state-sync'
+import { mentionStateKey } from '@/lib/mention-state'
+import { getGenerationPersistenceGuard } from '@/lib/canvas-runtime-ui'
 import { createGenerationStatusQuery, getGenerationPromptState, parseAspectRatio, resolveIncomingPrompt } from '@/lib/canvas-node-interactions'
 import { GenerationFeedbackOverlay, getGenerationFeedbackState, isTerminalGenerationStatus, getTerminalGenerationToast } from './generation-feedback'
 
@@ -156,7 +158,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   const [duration, setDuration] = useState((data.duration as string) || '')
   const [aspectRatio, setAspectRatio] = useState('9:16')
   const [resolution, setResolution] = useState((data.resolution as string) || '')
-  const [enableAudio, setEnableAudio] = useState((data.enableAudio as boolean) || false)
+  const [enableAudio, setEnableAudio] = useState((data.enableAudio as boolean | undefined) ?? true)
   const [enableLoop, setEnableLoop] = useState((data.enableLoop as boolean) || false)
   // Kling 2.6 voice IDs — up to 2, comma-separated in the input box.
   // User pastes IDs they generated from fal's create-voice endpoint;
@@ -196,7 +198,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   // Set true to immediately stop polling (cancel / unmount).
   const stopRef = useRef(false)
   const { getEdges, getNodes } = useReactFlow()
-  const { addEdges, addNodes, createNextShot, patchNodeData, replaceShot, updateNodeData } = useCanvasCollaboration()
+  const { addEdges, addNodes, createNextShot, patchNodeData, persistenceStatus, replaceShot, updateNodeData } = useCanvasCollaboration()
   const updateNodeInternals = useUpdateNodeInternals()
   const syncGuardRef = useRef(createLocalStateSyncGuard())
   // Collaboration methods are recreated when the shared canvas snapshot changes.
@@ -218,6 +220,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   // immediately before submission; this node never owns a prompt.
   const resolvedPrompt = resolveIncomingPrompt(id, getNodes(), getEdges())
   const promptState = getGenerationPromptState(id, getNodes(), getEdges())
+  const generationPersistenceGuard = getGenerationPersistenceGuard(persistenceStatus)
   const { folders } = useProjectFolders(projectId)
 
   // Check connection states fresh on each render
@@ -263,7 +266,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     setDuration((data.duration as string) || '')
     setAspectRatio('9:16')
     setResolution((data.resolution as string) || '')
-    setEnableAudio((data.enableAudio as boolean) || false)
+    setEnableAudio((data.enableAudio as boolean | undefined) ?? true)
     setEnableLoop((data.enableLoop as boolean) || false)
     setVoiceIds((data.voiceIds as string) || '')
     setNumVideos((data.numVideos as number) || 1)
@@ -650,11 +653,17 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleGenerate = async () => {
+    if (!generationPersistenceGuard.allowed) {
+      const message = generationPersistenceGuard.message || 'Prompt is not ready to generate yet.'
+      setError(message)
+      toast.error(message)
+      return
+    }
     if (!(await nodeLock.claim())) {
       toast.error(nodeLock.error || 'Node sedang dikerjakan user lain.')
       return
     }
-    const { connected, prompt: compiledPrompt } = resolveIncomingPrompt(id, getNodes(), getEdges())
+    const { connected, prompt: compiledPrompt, mentions: promptMentions } = resolveIncomingPrompt(id, getNodes(), getEdges())
     if (!connected) {
       setError('Connect a Text node first')
       return
@@ -787,7 +796,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     const referenceGroups = connectedReferenceUrls.map((url) => ({ urls: [url] }))
     const compiled = compileMentionsForModel(
       compiledPrompt,
-      resolvedPrompt.mentions,
+      promptMentions,
       folders,
       currentModel,
       referenceGroups.length,
@@ -825,6 +834,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
         projectId,
         nodeId: id,
         prompt: submitPrompt,
+        promptStateKey: mentionStateKey(compiledPrompt, promptMentions),
         referenceImageUrl: connectedImageUrl,
         endImageUrl: connectedEndImageUrl,
         referenceGroups: referenceGroups.length ? referenceGroups : undefined,
@@ -977,6 +987,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     [currentModel, numVideos, duration],
   )
   const generateTooltip = useMemo(() => {
+    if (!generationPersistenceGuard.allowed) return generationPersistenceGuard.message
     if (!resolvedPrompt.connected) return 'Connect a Text node first'
     if (!resolvedPrompt.prompt) return 'Enter text in the connected Text node'
     if (!currentModel) return 'Generate video'
@@ -986,7 +997,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
     const label = `Generate ${numVideos} video${numVideos === 1 ? '' : 's'}`
     if (!costEstimate.isKnown) return `${label}\n(price not estimated for this model)`
     return `${label}\nEstimated cost: ~${formatUSD(costEstimate.total)} (${formatUSD(costEstimate.perUnit)} each).\nReal cost depends on resolution, duration and model load.`
-  }, [blockedNoFirstFrame, costEstimate, currentModel, modelId, numVideos, resolvedPrompt.connected, resolvedPrompt.prompt, upscaleMode])
+  }, [blockedNoFirstFrame, costEstimate, currentModel, generationPersistenceGuard, modelId, numVideos, resolvedPrompt.connected, resolvedPrompt.prompt, upscaleMode])
   const requestGenerate = () => {
     if (submitInFlightRef.current || (generationId && ['submitting', 'in_queue', 'in_progress'].includes(status))) return
     if (costEstimate.isKnown && costEstimate.total >= COST_CONFIRM_THRESHOLD_USD) {
@@ -1284,7 +1295,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
                   aspectRatio: nextAspectRatio,
                   duration: nextDuration,
                   resolution: nextResolution,
-                  enableAudio: false,
+                  enableAudio: true,
                 })
               }}
               disabled={isGenerating}
@@ -1357,30 +1368,6 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
               />
             )}
             
-            {/* Audio toggle - only if model supports audio generation */}
-            {currentModel?.supportsAudio && (
-              <button
-                onClick={() => {
-                  syncGuardRef.current.beginUserEdit()
-                  setEnableAudio(a => {
-                    const next = !a
-                    patchPersistedNodeData({ enableAudio: next })
-                    return next
-                  })
-                }}
-                disabled={isGenerating}
-                className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors disabled:opacity-50 ${
-                  enableAudio ? 'bg-accent/20 text-accent' : 'bg-white/5 hover:bg-white/10 text-muted-foreground'
-                }`}
-                title="Generate with audio"
-              >
-                {enableAudio
-                  ? <SpeakerHigh size={11} weight="fill" />
-                  : <SpeakerSlash size={11} weight="thin" />
-                }
-              </button>
-            )}
-            
             {/* Loop toggle - only if model supports loop */}
             {currentModel?.supportsLoop && (
               <button
@@ -1416,7 +1403,7 @@ function VideoNodeImpl({ id, data, selected }: NodeProps) {
           ) : (
             <button
               onClick={requestGenerate}
-              disabled={isGenerating || blockedNoFirstFrame || promptState.disabled}
+              disabled={isGenerating || blockedNoFirstFrame || promptState.disabled || !generationPersistenceGuard.allowed}
               className="w-6 h-6 rounded-full bg-accent/20 hover:bg-accent text-accent hover:text-accent-foreground flex items-center justify-center transition-colors accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
               title={generateTooltip}
             >

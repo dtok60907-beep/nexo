@@ -38,8 +38,8 @@ export async function userOwnsFolder(sql: Sql, userId: string, folderId: string)
   const rows = await sql`
     SELECT 1
     FROM asset_folders f
-    JOIN projects p ON p.id = f.project_id
-    WHERE f.id = ${folderId} AND p.userid = ${userId}
+    JOIN projects p ON p.id::text = f.project_id::text
+    WHERE f.id::text = ${folderId} AND p.userid = ${userId}
     LIMIT 1
   `
   return rows.length > 0
@@ -49,8 +49,8 @@ export async function findOwnedGenerationAsset(sql: Sql, userId: string, assetId
   const rows = await sql`
     SELECT g.id, g.project_id, g.r2_url
     FROM generation_history g
-    JOIN projects p ON p.id::text = g.project_id
-    WHERE p.userid = ${userId} AND g.id = ${assetId}
+    JOIN projects p ON p.id::text = g.project_id::text
+    WHERE p.userid = ${userId} AND g.id::text = ${assetId}
     LIMIT 1
   ` as Array<{ id: string; project_id: string; r2_url: string | null }>
 
@@ -62,7 +62,7 @@ export async function deleteEmptyAssetFolders(sql: Sql, folderIds: string[]): Pr
 
   const rows = await sql`
     DELETE FROM asset_folders f
-    WHERE f.id = ANY(${folderIds}::text[])
+    WHERE f.id::text = ANY(${folderIds}::text[])
       AND NOT EXISTS (
         SELECT 1 FROM asset_folder_items i WHERE i.folder_id = f.id
       )
@@ -83,10 +83,10 @@ export async function countOwnedGenerationAssetsForProject(
   const rows = await sql`
     SELECT count(*)::int AS owned_count
     FROM generation_history g
-    JOIN projects p ON p.id::text = g.project_id
+    JOIN projects p ON p.id::text = g.project_id::text
     WHERE p.userid = ${userId}
-      AND g.project_id = ${projectId}
-      AND g.id = ANY(${assetIds}::text[])
+      AND g.project_id::text = ${projectId}::text
+      AND g.id::text = ANY(${assetIds}::text[])
   ` as Array<{ owned_count: number }>
 
   return Number(rows[0]?.owned_count ?? 0)

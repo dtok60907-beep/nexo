@@ -210,6 +210,17 @@ test('submit surfaces the real BytePlus error detail instead of a generic messag
   );
 });
 
+test('submit classifies a missing trusted asset without exposing provider internals as a code', async () => {
+  const adapter = createBytePlusAdapter({
+    apiKey: 'secret', baseUrl: 'https://ark.example/api/v3',
+    fetch: async () => jsonResponse({ error: { code: 'InvalidAsset', message: 'referenced asset not found' } }, { status: 400 }),
+  });
+  await assert.rejects(
+    adapter.submit({ model: 'dreamina-seedance-2-0-mini-260615', prompt: 'test', referenceImages: ['asset://gone'] }),
+    error => error.code === 'BYTEPLUS_REQUEST_FAILED' && error.assetNotFound === true,
+  );
+});
+
 test('downloadContent reads the single-object content shape and fetches the pre-signed TOS URL directly (not through the Ark host)', async () => {
   const calls = [];
   const adapter = createBytePlusAdapter({

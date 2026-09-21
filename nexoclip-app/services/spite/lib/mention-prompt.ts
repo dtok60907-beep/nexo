@@ -108,12 +108,30 @@ function collectGroups(
 
   const consider = (folder: FolderInput, selectedIds?: string[], selectedWorkspaceIds?: string[]) => {
     if (seen.has(folder.id)) return
+    const canonicalIds = [...new Set((selectedWorkspaceIds ?? []).filter(Boolean))]
+    const selectedIdCount = new Set(selectedIds ?? []).size
+    const hasCompleteCanonicalSelection = canonicalIds.length > 0
+      && (selectedIdCount === 0 || canonicalIds.length === selectedIdCount)
+    if (hasCompleteCanonicalSelection) {
+      seen.add(folder.id)
+      groupsByFolderId.set(folder.id, {
+        urls: canonicalIds.map((assetId) => `/api/assets/${encodeURIComponent(assetId)}/download`),
+        workspaceAssetIds: canonicalIds,
+        folderName: folder.name,
+        folderType: folder.type,
+      })
+      orderedFolderIds.push(folder.id)
+      return
+    }
+
     const useAll = !selectedIds || selectedIds.length === 0
     const idSet = new Set(selectedIds || [])
     const workspaceIdSet = new Set(selectedWorkspaceIds || [])
     const requested = folder.assets
       .filter((asset) => useAll || idSet.has(asset.id) || (asset.workspaceAssetId && workspaceIdSet.has(asset.workspaceAssetId)))
-    if (requested.some((asset) => !asset.workspaceAssetId)) needsCanonicalImport.add(folder.name)
+    if ((!useAll && requested.length < selectedIdCount) || requested.some((asset) => !asset.workspaceAssetId)) {
+      needsCanonicalImport.add(folder.name)
+    }
     const selected = requested.filter((asset) => !!asset.workspaceAssetId)
     const urls = selected.map((asset) => `/api/assets/${encodeURIComponent(asset.workspaceAssetId!)}/download`)
     if (urls.length === 0) return
@@ -128,8 +146,13 @@ function collectGroups(
   }
 
   for (const m of mentions) {
-    const folder = folders.find((f) => f.id === m.folderId)
-    if (folder) consider(folder, m.selectedAssetIds, m.selectedWorkspaceAssetIds)
+    const folder = folders.find((f) => f.id === m.folderId) ?? {
+      id: m.folderId,
+      name: m.name,
+      type: 'general' as const,
+      assets: [],
+    }
+    consider(folder, m.selectedAssetIds, m.selectedWorkspaceAssetIds)
   }
   const scanRe = /@([\w-]+)/g
   let scanMatch: RegExpExecArray | null
@@ -204,9 +227,17 @@ export function compileMentionsForModel(
 
   const rewritten = prompt.replace(/@([\w-]+)/g, (match, tag) => {
     const tagLower = (tag as string).toLowerCase()
-    const folder = folders.find(
-      (f) => tagFromName(f.name).toLowerCase() === tagLower,
+    const mention = mentions.find(
+      (candidate) => tagFromName(candidate.name).toLowerCase() === tagLower,
     )
+    const folder = folders.find(
+      (candidate) => candidate.id === mention?.folderId || tagFromName(candidate.name).toLowerCase() === tagLower,
+    ) ?? (mention ? {
+      id: mention.folderId,
+      name: mention.name,
+      type: 'general' as const,
+      assets: [],
+    } : undefined)
     if (!folder) return match
     if (!groupsByFolderId.has(folder.id)) return match
     return citationFor(folder.id)

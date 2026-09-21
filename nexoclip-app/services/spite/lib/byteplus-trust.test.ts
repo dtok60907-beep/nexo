@@ -56,6 +56,10 @@ test('legacy R2 proxy imports request a private same-origin trust copy', () => {
     trustImportSourceUrl('/spite/api/r2-image/uploads/reference.png?version=2'),
     '/spite/api/r2-image/uploads/reference.png?version=2&trust_import=1',
   )
+  assert.equal(
+    trustImportSourceUrl('https://ai-ugc-http.example/spite/api/r2-image/uploads/reference.png'),
+    '/spite/api/r2-image/uploads/reference.png?trust_import=1',
+  )
   assert.equal(trustImportSourceUrl('https://other.example/reference.png'), 'https://other.example/reference.png')
 })
 
@@ -189,6 +193,15 @@ test('both detail layouts wire the shared trust action to the selected asset in-
   assert.match(toolbarSource, /if \(trustRequestsRef\.current\.has\(asset\.id\)\) return/)
   assert.match(toolbarSource, /trustRequestsRef\.current\.add\(asset\.id\)/)
   assert.match(toolbarSource, /trustRequestsRef\.current\.delete\(asset\.id\)/)
+})
+
+test('opening a canonical active asset revalidates provider trust instead of trusting cached state', () => {
+  const validationEffect = toolbarSource.slice(
+    toolbarSource.indexOf('const workspaceAssetId = workspaceAssetIdFromUrl'),
+    toolbarSource.indexOf('// Listen for asset status changes'),
+  )
+  assert.match(validationEffect, /requestBytePlusTrust\(workspaceAssetId, 'GET'\)/)
+  assert.doesNotMatch(validationEffect, /asset\.byteplus_trust \|\|/)
 })
 
 test('processing trust polling uses one recursive timeout with cleanup, not an overlapping interval', () => {

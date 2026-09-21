@@ -12,6 +12,11 @@ export type CanvasRuntimeControls = {
   redo: () => void
 }
 
+export type GenerationPersistenceGuard = {
+  allowed: boolean
+  message?: string
+}
+
 const READ_ONLY_COMMANDS: RealtimeCanvasCommands = {
   applyNodeChanges: () => {},
   applyEdgeChanges: () => {},
@@ -46,6 +51,25 @@ export function getCanvasSaveIndicator(status: ProjectRuntimeState): CanvasSaveI
     case 'SYNCED':
     default:
       return { label: 'Pending', persisted: false }
+  }
+}
+
+export function shouldWarnBeforeCanvasUnload(status: ProjectRuntimeState): boolean {
+  return status === 'PERSISTING' || status === 'DEGRADED' || status === 'READ_ONLY'
+}
+
+export function getGenerationPersistenceGuard(status: ProjectRuntimeState): GenerationPersistenceGuard {
+  switch (status) {
+    case 'PERSISTING':
+      return { allowed: false, message: 'Prompt is still saving. Try again in a moment.' }
+    case 'DEGRADED':
+      return { allowed: false, message: 'Canvas saving is degraded. Reconnect before generating.' }
+    case 'READ_ONLY':
+      return { allowed: false, message: 'Canvas is read-only. Reconnect before generating.' }
+    case 'SYNCED':
+    case 'PERSISTED':
+    default:
+      return { allowed: true }
   }
 }
 

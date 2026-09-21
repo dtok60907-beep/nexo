@@ -11,7 +11,7 @@ import { createFoldersRouteHandlers } from '@/app/api/folders/route'
 import { createGenerateSubmitHandler } from '@/app/api/generate/submit/route'
 import { createGenerateStatusHandler } from '@/app/api/generate/status/route'
 import { createGenerateLatestHandler } from '@/app/api/generate/latest/route'
-import { countOwnedGenerationAssetsForProject } from '@/lib/project-ownership'
+import { countOwnedGenerationAssetsForProject, userOwnsFolder } from '@/lib/project-ownership'
 
 const OWNER_ID = '550e8400-e29b-41d4-a716-446655440001'
 const OTHER_USER_ID = '550e8400-e29b-41d4-a716-446655440002'
@@ -27,8 +27,19 @@ test('compares text generation asset IDs to UUID project IDs safely', async () =
 
   assert.equal(await countOwnedGenerationAssetsForProject(sql, OWNER_ID, OWNER_PROJECT_ID, ['550e8400-e29b-41d4-a716-446655440010']), 1)
   assert.match(query, /p\.id::text = g\.project_id/)
-  assert.match(query, /g\.project_id =\s+\?/)
-  assert.match(query, /g\.id = ANY\(\s*\?\s+::text\[\]\)/)
+  assert.match(query, /g\.project_id::text =\s+\?\s+::text/)
+  assert.match(query, /g\.id::text = ANY\(\s*\?\s+::text\[\]\)/)
+})
+
+test('compares UUID projects to mixed-schema folder project ids safely', async () => {
+  let query = ''
+  const sql = (async (strings: TemplateStringsArray) => {
+    query = strings.join(' ? ')
+    return [{ ok: 1 }]
+  }) as any
+
+  assert.equal(await userOwnsFolder(sql, OWNER_ID, 'folder-1'), true)
+  assert.match(query, /p\.id::text = f\.project_id::text/)
 })
 
 function makeRequest(url: string, {
@@ -179,6 +190,34 @@ function createFakeSqlFixture() {
 
   return { sql: sql as any, seedProject, seedAsset, projects }
 }
+
+test('project deletion compares UUID Yjs project ids safely', async () => {
+  const queries: string[] = []
+  const sql = (async (strings: TemplateStringsArray) => {
+    const query = strings.join(' ? ')
+    queries.push(query)
+    if (query.includes('SELECT 1') && query.includes('FROM projects')) return [{ ok: 1 }]
+    if (query.includes('SELECT id, r2_url') && query.includes('FROM generation_history')) {
+      return [{ id: 'asset-1', r2_url: 'https://example.com/test.png' }]
+    }
+    return []
+  }) as any
+  const handlers = createProjectRouteHandlers({
+    getDb: () => sql,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    createInternalRealtimeClient: () => ({}) as any,
+  })
+
+  const response = await handlers.DELETE(
+    makeRequest('http://spite.local/api/projects/id', { method: 'DELETE' }) as any,
+    { params: Promise.resolve({ projectId: OWNER_PROJECT_ID }) } as any,
+  )
+
+  assert.equal(response.status, 200)
+  const query = queries.find(value => value.includes('FROM canvas_yjs_documents')) ?? ''
+  assert.match(query, /p\.id::text = d\.project_id::text/)
+  assert.match(query, /d\.project_id::text <>/)
+})
 
 test('projects POST creates rows for the trusted user, not a browser-supplied userId', async () => {
   const fixture = createFakeSqlFixture()

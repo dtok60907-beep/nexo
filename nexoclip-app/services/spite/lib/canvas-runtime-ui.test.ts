@@ -5,7 +5,9 @@ import {
   createInvocationTimeRuntimeControls,
   getCanvasSaveIndicator,
   getCanvasRuntimeCapabilities,
+  getGenerationPersistenceGuard,
   guardCanvasRuntimeControls,
+  shouldWarnBeforeCanvasUnload,
 } from './canvas-runtime-ui'
 
 test('shows Saved only for durable PERSISTED status', () => {
@@ -21,6 +23,22 @@ test('uses distinct labels for pending, degraded, and read-only', () => {
   assert.equal(getCanvasSaveIndicator('PERSISTING').label, 'Saving')
   assert.equal(getCanvasSaveIndicator('DEGRADED').label, 'Degraded')
   assert.equal(getCanvasSaveIndicator('READ_ONLY').label, 'Read-only')
+})
+
+test('warns before refresh only while canvas changes may still be unsaved', () => {
+  assert.equal(shouldWarnBeforeCanvasUnload('PERSISTING'), true)
+  assert.equal(shouldWarnBeforeCanvasUnload('DEGRADED'), true)
+  assert.equal(shouldWarnBeforeCanvasUnload('SYNCED'), false)
+  assert.equal(shouldWarnBeforeCanvasUnload('PERSISTED'), false)
+  assert.equal(shouldWarnBeforeCanvasUnload('READ_ONLY'), true)
+})
+
+test('generation is blocked while saving is incomplete or unavailable', () => {
+  assert.equal(getGenerationPersistenceGuard('SYNCED').allowed, true)
+  assert.equal(getGenerationPersistenceGuard('PERSISTED').allowed, true)
+  assert.match(getGenerationPersistenceGuard('PERSISTING').message || '', /still saving/i)
+  assert.match(getGenerationPersistenceGuard('DEGRADED').message || '', /degraded/i)
+  assert.match(getGenerationPersistenceGuard('READ_ONLY').message || '', /read-only/i)
 })
 
 test('read-only disables mutations but keeps presence enabled', () => {

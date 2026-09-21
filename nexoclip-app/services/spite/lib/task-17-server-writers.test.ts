@@ -8,15 +8,24 @@ import { createGenerateSubmitHandler } from '../app/api/generate/submit/route'
 import { createDuplicateProjectHandler } from '../app/api/projects/[projectId]/duplicate/route'
 import { createCanvasSnapshotRouteHandlers } from '../app/api/projects/[projectId]/canvas/snapshots/route'
 import { createAttachGeneratedMediaToNode } from './r2-upload'
+import { mentionStateKey } from './mention-state'
 
 const OWNER_ID = '550e8400-e29b-41d4-a716-446655440001'
 const PROJECT_ID = '550e8400-e29b-41d4-a716-446655440000'
 const SNAPSHOT_ID = '550e8400-e29b-41d4-a716-446655440099'
 
-function canvasWithNode(id: string, type = 'imageGen', data: Record<string, unknown> = {}) {
+function canvasWithNode(
+  id: string,
+  type = 'imageGen',
+  data: Record<string, unknown> = {},
+  prompt = 'red kite',
+) {
   return {
-    nodes: [{ id, type, position: { x: 0, y: 0 }, data }],
-    edges: [],
+    nodes: [
+      { id: 'prompt-node', type: 'prompt', position: { x: 0, y: 0 }, data: { text: prompt, mentions: [] } },
+      { id, type, position: { x: 100, y: 0 }, data },
+    ],
+    edges: [{ id: `prompt-${id}`, source: 'prompt-node', target: id, targetHandle: 'prompt-in', data: {} }],
     scenes: [{ id: 'scene-1', name: 'Scene 1' }],
     activeSceneId: 'scene-1',
   }
@@ -42,7 +51,10 @@ function makeRequest(url: string, {
   let payload: string | undefined
   if (body !== undefined) {
     headers['content-type'] = 'application/json'
-    payload = JSON.stringify(body)
+    const requestBody = body && typeof body === 'object' && 'prompt' in body && typeof body.prompt === 'string'
+      ? { promptStateKey: mentionStateKey(body.prompt, []), ...body }
+      : body
+    payload = JSON.stringify(requestBody)
   }
 
   const request = new Request(url, { method, headers, body: payload }) as Request & { nextUrl?: URL }
@@ -92,6 +104,228 @@ test('submits an owned image node as a durable NexoClip generation and patches i
   assert.equal(typeof (patches[0] as any).set.submittedAt, 'number')
 })
 
+test('rejects generation when the durable canvas has no connected Prompt node', async () => {
+  let submitted = false
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { submitted = true; throw new Error('submit should not be called') },
+      status: async () => { throw new Error('status should not be called') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({
+        projection: {
+          ...canvasWithNode('image-node-1', 'imageGen'),
+          nodes: [{ id: 'image-node-1', type: 'imageGen', position: { x: 100, y: 0 }, data: {} }],
+          edges: [],
+        },
+        durableSeq: 7,
+        projectedSeq: 7,
+      }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: {
+      projectId: PROJECT_ID,
+      nodeId: 'image-node-1',
+      kind: 'image',
+      prompt: 'local-only prompt',
+      model: 'model-1',
+    },
+  }))
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).code, 'PROMPT_STATE_NOT_PERSISTED')
+  assert.equal(submitted, false)
+})
+
+test('rejects generation when the submitted prompt state is not the durable connected prompt state', async () => {
+  let submitted = false
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { submitted = true; throw new Error('submit should not be called') },
+      status: async () => { throw new Error('status should not be called') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({
+        projection: {
+          ...canvasWithNode('image-node-1', 'imageGen'),
+          nodes: [
+            { id: 'prompt-node-1', type: 'prompt', position: { x: 0, y: 0 }, data: { text: 'old prompt', mentions: [] } },
+            { id: 'image-node-1', type: 'imageGen', position: { x: 100, y: 0 }, data: {} },
+          ],
+          edges: [{ id: 'prompt-edge', source: 'prompt-node-1', target: 'image-node-1', targetHandle: 'prompt-in', data: {} }],
+        },
+        durableSeq: 7,
+        projectedSeq: 7,
+      }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: {
+      projectId: PROJECT_ID,
+      nodeId: 'image-node-1',
+      kind: 'image',
+      prompt: 'new prompt',
+      promptStateKey: mentionStateKey('new prompt', []),
+      model: 'model-1',
+    },
+  }))
+
+  assert.equal(response.status, 409)
+  assert.deepEqual(await response.json(), {
+    error: 'Prompt changed locally but is not persisted yet. Please wait for it to finish saving and try again.',
+    code: 'PROMPT_STATE_NOT_PERSISTED',
+  })
+  assert.equal(submitted, false)
+})
+
+test('accepts generation when the submitted prompt state matches the durable connected prompt state', async () => {
+  const submissions: unknown[] = []
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async (input) => { submissions.push(input); return { id: 'generation-prompt-1', kind: 'image', status: 'queued' } },
+      status: async () => { throw new Error('status should not be called') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({
+        projection: {
+          ...canvasWithNode('image-node-1', 'imageGen'),
+          nodes: [
+            { id: 'prompt-node-1', type: 'prompt', position: { x: 0, y: 0 }, data: { text: 'durable prompt', mentions: [] } },
+            { id: 'image-node-1', type: 'imageGen', position: { x: 100, y: 0 }, data: {} },
+          ],
+          edges: [{ id: 'prompt-edge', source: 'prompt-node-1', target: 'image-node-1', targetHandle: 'prompt-in', data: {} }],
+        },
+        durableSeq: 7,
+        projectedSeq: 7,
+      }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: {
+      projectId: PROJECT_ID,
+      nodeId: 'image-node-1',
+      kind: 'image',
+      prompt: 'compiled durable prompt',
+      promptStateKey: mentionStateKey('durable prompt', []),
+      model: 'model-1',
+    },
+  }))
+
+  assert.equal(response.status, 202)
+  assert.equal((submissions[0] as any).input.prompt, 'compiled durable prompt')
+})
+
+test('rejects Seedance when a durable mention is missing from the submitted references', async () => {
+  let submitted = false
+  const mentions = [{
+    folderId: 'nathan',
+    name: 'Nathan',
+    selectedAssetIds: ['legacy-nathan'],
+    selectedWorkspaceAssetIds: ['workspace-nathan'],
+  }]
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { submitted = true; throw new Error('submit should not be called') },
+      status: async () => { throw new Error('status should not be called') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({
+        projection: {
+          ...canvasWithNode('video-node-1', 'videoGen'),
+          nodes: [
+            { id: 'prompt-node-1', type: 'prompt', position: { x: 0, y: 0 }, data: { text: '@Nathan walking', mentions } },
+            { id: 'video-node-1', type: 'videoGen', position: { x: 100, y: 0 }, data: {} },
+          ],
+          edges: [{ id: 'prompt-edge', source: 'prompt-node-1', target: 'video-node-1', targetHandle: 'prompt-in', data: {} }],
+        },
+        durableSeq: 8,
+        projectedSeq: 8,
+      }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: {
+      projectId: PROJECT_ID,
+      nodeId: 'video-node-1',
+      kind: 'video',
+      prompt: 'compiled prompt without Nathan',
+      promptStateKey: mentionStateKey('@Nathan walking', mentions),
+      model: 'seedance-2.0',
+      settings: { duration: '5' },
+    },
+  }))
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).code, 'PROMPT_STATE_NOT_PERSISTED')
+  assert.equal(submitted, false)
+})
+
+test('rejects Seedance when durable mention metadata has no complete canonical identity', async () => {
+  let submitted = false
+  const mentions = [{ folderId: 'nathan', name: 'Nathan', selectedAssetIds: ['legacy-nathan'] }]
+  const handler = createGenerateSubmitHandler({
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    getDb: ownedProjectSql,
+    createNexoClipGenerationClient: () => ({
+      submit: async () => { submitted = true; throw new Error('submit should not be called') },
+      status: async () => { throw new Error('status should not be called') },
+    }),
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({
+        projection: {
+          ...canvasWithNode('video-node-1', 'videoGen'),
+          nodes: [
+            { id: 'prompt-node-1', type: 'prompt', position: { x: 0, y: 0 }, data: { text: '@Nathan walking', mentions } },
+            { id: 'video-node-1', type: 'videoGen', position: { x: 100, y: 0 }, data: {} },
+          ],
+          edges: [{ id: 'prompt-edge', source: 'prompt-node-1', target: 'video-node-1', targetHandle: 'prompt-in', data: {} }],
+        },
+        durableSeq: 8,
+        projectedSeq: 8,
+      }),
+      patchNodeData: async () => {},
+    }) as any,
+  })
+
+  const response = await handler(makeRequest('http://spite.local/api/generate/submit', {
+    method: 'POST',
+    body: {
+      projectId: PROJECT_ID,
+      nodeId: 'video-node-1',
+      kind: 'video',
+      prompt: 'compiled prompt',
+      promptStateKey: mentionStateKey('@Nathan walking', mentions),
+      model: 'seedance-2.0',
+      settings: { duration: '5' },
+    },
+  }))
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).code, 'PROMPT_STATE_NOT_PERSISTED')
+  assert.equal(submitted, false)
+})
+
 test('rejects non-portrait Seedance video settings before queueing', async () => {
   const submissions: unknown[] = []
   let checkedLegacyReferences: string[] = []
@@ -111,7 +345,7 @@ test('rejects non-portrait Seedance video settings before queueing', async () =>
       status: async () => { throw new Error('status should not be called') },
     }),
     createInternalRealtimeClient: () => ({
-      exportDocument: async () => ({ projection: canvasWithNode('video-node-1', 'videoGen'), durableSeq: 1, projectedSeq: 1 }),
+      exportDocument: async () => ({ projection: canvasWithNode('video-node-1', 'videoGen', {}, 'Nathan walking'), durableSeq: 1, projectedSeq: 1 }),
       patchNodeData: async () => {},
     }) as any,
   })
@@ -146,7 +380,7 @@ test('rejects legacy Canvas references outside the owned project', async () => {
       status: async () => { throw new Error('status should not be called') },
     }),
     createInternalRealtimeClient: () => ({
-      exportDocument: async () => ({ projection: canvasWithNode('video-node-1', 'videoGen'), durableSeq: 1, projectedSeq: 1 }),
+      exportDocument: async () => ({ projection: canvasWithNode('video-node-1', 'videoGen', {}, 'Nathan walking'), durableSeq: 1, projectedSeq: 1 }),
       patchNodeData: async () => {},
     }) as any,
   })
@@ -713,13 +947,77 @@ test('generate/recover bulk cleanup clears pending markers via authoritative rea
   }])
 })
 
+test('asset delete preserves canonical workspace assets when unified delete returns 404', async () => {
+  let legacyDeleteRan = false
+  const handlers = createAssetRouteHandlers({
+    getDb: () => (async (strings: TemplateStringsArray) => {
+      const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id::text = g.project_id::text where p.userid = ? and g.id::text = ? limit 1')) {
+        return [{
+          id: 'asset-1',
+          project_id: PROJECT_ID,
+          r2_url: '/api/assets/978ba173-d6ce-4c3e-8830-83cd4ca66092/download',
+        }]
+      }
+      legacyDeleteRan = true
+      throw new Error(`Legacy cleanup should not run: ${normalized}`)
+    }) as any,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    fetchFn: async () => new Response(JSON.stringify({ error: 'Asset not found' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }),
+    getR2Client: () => ({ send: async () => { throw new Error('R2 delete should not run') } }) as any,
+    env: { NEXOCLIP_INTERNAL_URL: 'http://nexoclip-app:3000' },
+  })
+
+  const response = await handlers.DELETE(makeRequest('http://spite.local/api/assets/asset-1', {
+    method: 'DELETE',
+  }) as any, { params: Promise.resolve({ assetId: 'asset-1' }) } as any)
+
+  assert.equal(response.status, 404)
+  assert.equal(legacyDeleteRan, false)
+})
+
+test('asset delete keeps legacy fallback for non-workspace assets', async () => {
+  let r2Deleted = false
+  const handlers = createAssetRouteHandlers({
+    getDb: () => (async (strings: TemplateStringsArray) => {
+      const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.includes('from generation_history')) {
+        return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: '/uploads/legacy.png' }]
+      }
+      if (normalized.startsWith('delete from asset_folder_items')) return []
+      if (normalized.includes('from canvas_yjs_documents')) return []
+      if (normalized.startsWith('delete from generation_history')) return []
+      throw new Error(`Unhandled SQL in legacy asset delete test: ${normalized}`)
+    }) as any,
+    getAuthenticatedUser: async () => ({ id: OWNER_ID }),
+    fetchFn: async () => new Response(JSON.stringify({ error: 'Asset not found' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }),
+    getR2Client: () => ({ send: async () => { r2Deleted = true } }) as any,
+    createInternalRealtimeClient: () => ({
+      exportDocument: async () => ({ projection: { nodes: [], edges: [], scenes: [] } }),
+    }) as any,
+  })
+
+  const response = await handlers.DELETE(makeRequest('http://spite.local/api/assets/asset-1', {
+    method: 'DELETE',
+  }) as any, { params: Promise.resolve({ assetId: 'asset-1' }) } as any)
+
+  assert.equal(response.status, 200)
+  assert.equal(r2Deleted, true)
+})
+
 test('asset delete consults authoritative document when projection lags before removing media', async () => {
   const exportCalls: unknown[] = []
   const handlers = createAssetRouteHandlers({
     getDb: () => (async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const normalized = strings.join(' ? ').replace(/\s+/g, ' ').trim().toLowerCase()
 
-      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id = g.project_id where p.userid = ? and g.id = ? limit 1')) {
+      if (normalized.startsWith('select g.id, g.project_id, g.r2_url from generation_history g join projects p on p.id::text = g.project_id::text where p.userid = ? and g.id::text = ? limit 1')) {
         return [{ id: 'asset-1', project_id: PROJECT_ID, r2_url: '/uploads/generated.png' }]
       }
 
@@ -775,5 +1073,6 @@ test('asset delete consults authoritative document when projection lags before r
     kept: true,
     reason: 'still_on_canvas',
     removed_from_folders: 0,
+    deleted_folders: 0,
   })
 })

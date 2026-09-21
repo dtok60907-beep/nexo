@@ -30,6 +30,7 @@ export default function AssetsPage() {
   const [filterType, setFilterType] = useState<FilterType>('all')
   const [copied, setCopied] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     const loadAssets = async () => {
@@ -82,14 +83,22 @@ export default function AssetsPage() {
 
   const handleDelete = async (assetId: string) => {
     setDeleting(assetId)
+    setDeleteError(null)
     try {
       const res = await fetch(withBasePath(`/api/assets/${assetId}`), { method: 'DELETE' })
-      if (res.ok) {
-        setAssets(assets.filter(a => a.id !== assetId))
-        if (selectedAsset?.id === assetId) setSelectedAsset(null)
+      const payload = await res.json().catch(() => null) as { error?: { message?: string } | string } | null
+      if (!res.ok) {
+        const message = typeof payload?.error === 'string'
+          ? payload.error
+          : payload?.error?.message || `Delete failed (${res.status})`
+        setDeleteError(message)
+        return
       }
+      setAssets(current => current.filter(a => a.id !== assetId))
+      if (selectedAsset?.id === assetId) setSelectedAsset(null)
     } catch (err) {
       console.error('Failed to delete asset:', err)
+      setDeleteError('Delete failed. Please try again.')
     } finally {
       setDeleting(null)
     }
@@ -388,7 +397,12 @@ export default function AssetsPage() {
           
           {/* Delete button */}
           {!selectedAsset.usedincanvas && (
-            <div className="p-4 border-t border-zinc-800">
+            <div className="p-4 border-t border-zinc-800 space-y-2">
+              {deleteError && (
+                <p role="alert" className="text-sm text-red-400">
+                  {deleteError}
+                </p>
+              )}
               <Button
                 variant="destructive"
                 className="w-full"

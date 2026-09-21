@@ -56,6 +56,31 @@ export async function compareAndSetBytePlusAssetLinkStatus(client, {
   return result.rows[0] || null;
 }
 
+export async function deleteBytePlusAssetLink(client, {
+  workspaceId, localAssetId, providerAssetId, attemptId,
+}) {
+  const result = await client.query(
+    `DELETE FROM byteplus_asset_links
+     WHERE workspace_id = $1 AND local_asset_id = $2
+       AND provider_asset_id = $3 AND attempt_id = $4`,
+    [workspaceId, localAssetId, providerAssetId, attemptId],
+  );
+  return result.rowCount > 0;
+}
+
+export async function markBytePlusAssetLinkStale(client, {
+  workspaceId, localAssetId, providerAssetId, attemptId, errorCode,
+}) {
+  const result = await client.query(
+    `UPDATE byteplus_asset_links
+     SET status = 'failed', error = $5::jsonb, updated_at = now()
+     WHERE workspace_id = $1 AND local_asset_id = $2
+       AND provider_asset_id = $3 AND attempt_id = $4`,
+    [workspaceId, localAssetId, providerAssetId, attemptId, JSON.stringify({ code: errorCode })],
+  );
+  return result.rowCount > 0;
+}
+
 export async function resetBytePlusAssetLink(client, {
   workspaceId, localAssetId, attemptId, projectName, clearGroup = false,
 }) {

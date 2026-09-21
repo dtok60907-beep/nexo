@@ -59,18 +59,21 @@ class FakeProvider {
   readonly document: Y.Doc
   readonly token: string | (() => Promise<string>) | null
   readonly onStateless: (event: { payload: string }) => void
+  readonly onSynced?: (event: { state: boolean }) => void
   destroyed = false
 
   constructor(configuration: {
     document: Y.Doc
     token: string | (() => Promise<string>) | null
     onStateless: (event: { payload: string }) => void
+    onSynced?: (event: { state: boolean }) => void
     onAwarenessChange?: () => void
     onAwarenessUpdate?: () => void
   }) {
     this.document = configuration.document
     this.token = configuration.token
     this.onStateless = configuration.onStateless
+    this.onSynced = configuration.onSynced
     if (configuration.onAwarenessChange) {
       this.awareness.on('change', configuration.onAwarenessChange)
     }
@@ -88,6 +91,10 @@ class FakeProvider {
 
   emitStateless(payload: string): void {
     this.onStateless({ payload })
+  }
+
+  emitSynced(state = true): void {
+    this.onSynced?.({ state })
   }
 
   destroy(): void {
@@ -725,6 +732,7 @@ test('realtime room caches one doc/provider per project, refreshes tokens throug
 
   assert.equal(roomA, roomB)
   assert.equal(createdProviders.length, 1)
+  createdProviders[0].emitSynced()
 
   const tokenOne = await createdProviders[0].requestToken()
   const tokenTwo = await createdProviders[0].requestToken()
@@ -746,6 +754,47 @@ test('realtime room caches one doc/provider per project, refreshes tokens throug
 
   createdProviders[0].emitStateless(
     JSON.stringify({ type: 'ACK', projectId: tokenProjectId, status: 'PERSISTED', seq: 7 }),
+  )
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTED')
+
+  roomA.commands.createNode({
+    id: 'local-prompt',
+    type: 'prompt',
+    position: { x: 0, y: 0 },
+    data: { text: 'local draft', mentions: [] },
+  })
+  roomA.commands.patchNodeData('local-prompt', { text: 'newer local draft' })
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTING')
+
+  createdProviders[0].emitStateless(
+    JSON.stringify({ type: 'ACK', projectId: tokenProjectId, status: 'PERSISTED', seq: 8 }),
+  )
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTING')
+
+  createdProviders[0].emitStateless(
+    JSON.stringify({ type: 'ACK', projectId: tokenProjectId, status: 'PERSISTED', seq: 9 }),
+  )
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTED')
+
+  roomA.undo()
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTING')
+  createdProviders[0].emitStateless(
+    JSON.stringify({ type: 'ACK', projectId: tokenProjectId, status: 'PERSISTED', seq: 10 }),
+  )
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTED')
+
+  roomA.commands.createNode({
+    id: 'offline-prompt',
+    type: 'prompt',
+    position: { x: 0, y: 0 },
+    data: { text: 'offline draft one', mentions: [] },
+  })
+  roomA.commands.patchNodeData('offline-prompt', { text: 'offline draft two' })
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTING')
+  createdProviders[0].emitSynced()
+  assert.equal(roomA.getSnapshot().persistenceStatus, 'SYNCED')
+  createdProviders[0].emitStateless(
+    JSON.stringify({ type: 'ACK', projectId: tokenProjectId, status: 'PERSISTED', seq: 11 }),
   )
   assert.equal(roomA.getSnapshot().persistenceStatus, 'PERSISTED')
 
