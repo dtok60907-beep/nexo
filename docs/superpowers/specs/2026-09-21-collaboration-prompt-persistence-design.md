@@ -1,6 +1,6 @@
 # Collaboration Prompt Persistence and Mention Integrity
 
-**Date:** 2026-09-21  
+**Date:** 2026-09-21
 **Status:** Implemented; browser refresh validation pending
 
 ## Goal
