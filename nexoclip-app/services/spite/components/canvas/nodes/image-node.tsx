@@ -24,6 +24,8 @@ import { completeGenerationNode } from '@/lib/generation-node'
 import { ConnectedInputs } from '../connected-inputs'
 import { useCanvasCollaboration } from '../canvas-collaboration'
 import { createLocalStateSyncGuard } from '@/lib/local-state-sync'
+import { mentionStateKey } from '@/lib/mention-state'
+import { getGenerationPersistenceGuard } from '@/lib/canvas-runtime-ui'
 import { createGenerationStatusQuery, getGenerationPromptState, parseAspectRatio, resolveIncomingPrompt } from '@/lib/canvas-node-interactions'
 import { GenerationFeedbackOverlay, getGenerationFeedbackState, isTerminalGenerationStatus, getTerminalGenerationToast } from './generation-feedback'
 
@@ -185,7 +187,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   // status check can't reschedule itself or apply a late result.
   const stopRef = useRef(false)
   const { getEdges, getNodes } = useReactFlow()
-  const { addEdges, addNodes, createNextShot, patchNodeData, replaceShot, updateNodeData } = useCanvasCollaboration()
+  const { addEdges, addNodes, createNextShot, patchNodeData, persistenceStatus, replaceShot, updateNodeData } = useCanvasCollaboration()
   const updateNodeInternals = useUpdateNodeInternals()
   const syncGuardRef = useRef(createLocalStateSyncGuard())
   // Collaboration methods are recreated when the shared canvas snapshot changes.
@@ -217,6 +219,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   // immediately before recovery/submission; this node never owns a prompt.
   const resolvedPrompt = resolveIncomingPrompt(id, getNodes(), getEdges())
   const promptState = getGenerationPromptState(id, getNodes(), getEdges())
+  const generationPersistenceGuard = getGenerationPersistenceGuard(persistenceStatus)
   const { folders } = useProjectFolders(projectId)
 
   useEffect(() => {
@@ -661,11 +664,17 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
   }
 
   const handleGenerate = async () => {
+    if (!generationPersistenceGuard.allowed) {
+      const message = generationPersistenceGuard.message || 'Prompt is not ready to generate yet.'
+      setError(message)
+      toast.error(message)
+      return
+    }
     if (!(await nodeLock.claim())) {
       toast.error(nodeLock.error || 'Node sedang dikerjakan user lain.')
       return
     }
-    const { connected, prompt: compiledPrompt } = resolveIncomingPrompt(id, getNodes(), getEdges())
+    const { connected, prompt: compiledPrompt, mentions: promptMentions } = resolveIncomingPrompt(id, getNodes(), getEdges())
     if (!connected) {
       setError('Connect a Text node first')
       return
@@ -752,7 +761,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         : connectedImageUrl ? 1 : 0
     const compiled = compileMentionsForModel(
       compiledPrompt,
-      resolvedPrompt.mentions,
+      promptMentions,
       folders,
       currentModel,
       usedSlots,
@@ -785,6 +794,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
         projectId,
         nodeId: id,
         prompt: compiled.prompt,
+        promptStateKey: mentionStateKey(compiledPrompt, promptMentions),
         referenceImageUrl: connectedImageUrl,
         referenceGroups: allRefGroups.length > 0 ? allRefGroups : undefined,
         settings: { aspectRatio, resolution },
@@ -933,13 +943,14 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
     [currentModel, numImages],
   )
   const generateTooltip = useMemo(() => {
+    if (!generationPersistenceGuard.allowed) return generationPersistenceGuard.message
     if (!resolvedPrompt.connected) return 'Connect a Text node first'
     if (!resolvedPrompt.prompt) return 'Enter text in the connected Text node'
     if (!currentModel) return 'Generate image'
     const label = `Generate ${numImages} image${numImages === 1 ? '' : 's'}`
     if (!costEstimate.isKnown) return `${label}\n(price not estimated for this model)`
     return `${label}\nEstimated cost: ~${formatUSD(costEstimate.total)} (${formatUSD(costEstimate.perUnit)} each).\nReal cost depends on resolution and model load.`
-  }, [currentModel, numImages, costEstimate, resolvedPrompt.connected, resolvedPrompt.prompt])
+  }, [currentModel, numImages, costEstimate, generationPersistenceGuard, resolvedPrompt.connected, resolvedPrompt.prompt])
   const requestGenerate = () => {
     if (submitInFlightRef.current || (generationId && ['submitting', 'in_queue', 'in_progress'].includes(status))) return
     if (costEstimate.isKnown && costEstimate.total >= COST_CONFIRM_THRESHOLD_USD) {
@@ -1233,7 +1244,7 @@ function ImageNodeImpl({ id, data, selected }: NodeProps) {
           ) : (
             <button
               onClick={requestGenerate}
-              disabled={isGenerating || promptState.disabled}
+              disabled={isGenerating || promptState.disabled || !generationPersistenceGuard.allowed}
               className="w-6 h-6 rounded-full bg-accent/20 hover:bg-accent text-accent hover:text-accent-foreground flex items-center justify-center transition-colors accent-glow disabled:opacity-50 disabled:cursor-not-allowed"
               title={generateTooltip}
             >

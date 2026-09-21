@@ -8,6 +8,7 @@ import { withBasePath } from '../lib/base-path'
 import { needsDurableGenerationRecovery } from '../lib/durable-generation'
 import {
   createReactFlowBinding,
+  LOCAL_REACT_FLOW_ORIGIN,
   type RealtimeCanvasBinding,
   type RealtimeCanvasBindingSnapshot,
 } from '../lib/realtime/react-flow-binding'
@@ -264,6 +265,7 @@ export class RealtimeCanvasRoom {
   private readonly fetchFn: FetchLike
   private readonly recoveringGenerationKeys = new Set<string>()
   private hasCompletedInitialSync = false
+  private pendingLocalUpdates = 0
 
   constructor(
     readonly projectId: string,
@@ -288,6 +290,7 @@ export class RealtimeCanvasRoom {
       }
       this.emit()
     })
+    this.doc.on('update', this.handleDocumentUpdate)
 
     this.provider = (options.createProvider ?? createDefaultProvider)({
       url: options.websocketUrl ?? resolveRealtimeWebsocketUrl(),
@@ -301,7 +304,19 @@ export class RealtimeCanvasRoom {
       },
       onSynced: ({ state }) => {
         if (state) {
+          const isReconnect = this.hasCompletedInitialSync
           this.hasCompletedInitialSync = true
+          // Reconnect may coalesce offline transactions into one update, or
+          // may transmit nothing when Neon committed before the old socket lost
+          // its ACK. Per-transaction counting is no longer meaningful after a
+          // successful state-vector sync, so reset it and let subsequent server
+          // STATUS/ACK messages describe durability. Generation still performs
+          // an authoritative prompt-state comparison server-side.
+          if (isReconnect && this.pendingLocalUpdates > 0) {
+            this.pendingLocalUpdates = 0
+            this.snapshot = { ...this.snapshot, persistenceStatus: 'SYNCED' }
+            this.emit()
+          }
           void this.recoverDurableGenerations()
         }
       },
@@ -421,10 +436,24 @@ export class RealtimeCanvasRoom {
   destroy(): void {
     this.provider.awareness?.off?.('change', this.handleAwarenessChange)
     this.provider.awareness?.off?.('update', this.handleAwarenessChange)
+    this.doc.off('update', this.handleDocumentUpdate)
     this.binding.destroy()
     this.provider.destroy()
     this.recoveringGenerationKeys.clear()
     this.listeners.clear()
+  }
+
+  private readonly handleDocumentUpdate = (_update: Uint8Array, origin: unknown) => {
+    const localMutation = origin === LOCAL_REACT_FLOW_ORIGIN || origin instanceof Y.UndoManager
+    if (!localMutation || this.snapshot.persistenceStatus === 'READ_ONLY') {
+      return
+    }
+    this.pendingLocalUpdates += 1
+    this.snapshot = {
+      ...this.snapshot,
+      persistenceStatus: this.snapshot.persistenceStatus === 'DEGRADED' ? 'DEGRADED' : 'PERSISTING',
+    }
+    this.emit()
   }
 
   private readonly handleAwarenessChange = () => {
@@ -441,9 +470,23 @@ export class RealtimeCanvasRoom {
       return
     }
 
+    if (message.type === 'ACK') {
+      this.pendingLocalUpdates = Math.max(0, this.pendingLocalUpdates - 1)
+      this.snapshot = {
+        ...this.snapshot,
+        persistenceStatus: this.pendingLocalUpdates > 0 ? 'PERSISTING' : 'PERSISTED',
+      }
+      this.emit()
+      return
+    }
+
+    const persistenceStatus = this.pendingLocalUpdates > 0
+      && (message.status === 'SYNCED' || message.status === 'PERSISTED')
+      ? 'PERSISTING'
+      : message.status
     this.snapshot = {
       ...this.snapshot,
-      persistenceStatus: message.status,
+      persistenceStatus,
     }
     this.emit()
   }
