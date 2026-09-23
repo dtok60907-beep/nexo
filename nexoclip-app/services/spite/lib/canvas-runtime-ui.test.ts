@@ -97,11 +97,19 @@ test('captured runtime controls re-check READ_ONLY at invocation time (including
   capturedRedo()
 
   statusRef.current = 'READ_ONLY'
+  capturedCommands.switchScene('scene-2')
   capturedCommands.createNode(sampleNode)
   capturedCommands.batch((mutations: any) => mutations.createNode(sampleNode))
   capturedUndo()
   capturedRedo()
-  assert.deepEqual(calls, ['createNode', 'batch', 'batch.createNode', 'undo', 'redo'])
+  assert.deepEqual(calls, [
+    'createNode',
+    'batch',
+    'batch.createNode',
+    'undo',
+    'redo',
+    'switchScene',
+  ])
 
   statusRef.current = 'PERSISTED'
   capturedCommands.createNode(sampleNode)
@@ -114,6 +122,7 @@ test('captured runtime controls re-check READ_ONLY at invocation time (including
     'batch.createNode',
     'undo',
     'redo',
+    'switchScene',
     'createNode',
     'batch',
     'batch.createNode',
@@ -152,6 +161,7 @@ test('read-only runtime controls no-op document commands but keep writable statu
   } as any
 
   const readOnlyControls = guardCanvasRuntimeControls(controls, 'READ_ONLY')
+  readOnlyControls.commands.switchScene('scene-2')
   readOnlyControls.commands.createNode({})
   assert.deepEqual(readOnlyControls.commands.duplicateNodes(['node-1']), [])
   assert.equal(readOnlyControls.commands.createNextShot('node-1'), null)
@@ -160,7 +170,7 @@ test('read-only runtime controls no-op document commands but keep writable statu
   readOnlyControls.commands.batch(({ createNode }: { createNode: (node?: unknown) => void }) => createNode({}))
   readOnlyControls.undo()
   readOnlyControls.redo()
-  assert.deepEqual(calls, [])
+  assert.deepEqual(calls, ['switchScene'])
 
   const writableControls = guardCanvasRuntimeControls(controls, 'PERSISTED')
   writableControls.commands.createNode({})
@@ -172,6 +182,7 @@ test('read-only runtime controls no-op document commands but keep writable statu
   writableControls.undo()
   writableControls.redo()
   assert.deepEqual(calls, [
+    'switchScene',
     'createNode',
     'duplicateNodes',
     'createNextShot',

@@ -93,7 +93,10 @@ export function guardCanvasRuntimeControls<T extends CanvasRuntimeControls>(
 
   return {
     ...controls,
-    commands: READ_ONLY_COMMANDS,
+    commands: {
+      ...READ_ONLY_COMMANDS,
+      switchScene: controls.commands.switchScene,
+    },
     undo: () => {},
     redo: () => {},
   }
@@ -128,7 +131,7 @@ export function createInvocationTimeRuntimeControls<T extends CanvasRuntimeContr
       connect: (...args) => invoke((controls) => controls.commands.connect(...args), () => null),
       createScene: (...args) => invoke((controls) => controls.commands.createScene(...args), () => 'scene-1'),
       deleteScene: (...args) => invoke((controls) => controls.commands.deleteScene(...args), () => undefined),
-      switchScene: (...args) => invoke((controls) => controls.commands.switchScene(...args), () => undefined),
+      switchScene: (...args) => controlsRef.current.commands.switchScene(...args),
       setProjectName: (...args) => invoke((controls) => controls.commands.setProjectName(...args), () => undefined),
       batch: (...args) => invoke((controls) => controls.commands.batch(...args), () => undefined),
     },

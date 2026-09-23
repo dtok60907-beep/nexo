@@ -1219,7 +1219,6 @@ function CanvasInner({ projectId }: { projectId: string }) {
         scenes={scenesWithShots}
         activeSceneId={activeSceneId}
         onSceneChange={(sceneId) => {
-          if (!allowDocumentMutation) return
           commands.switchScene(sceneId)
           setSelectedNodeIds([])
         }}
