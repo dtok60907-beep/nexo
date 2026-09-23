@@ -95,24 +95,35 @@ export function createReactFlowBinding(
 ): RealtimeCanvasBinding {
   const listeners = new Set<() => void>()
   const duplicateOffset = options.duplicateOffset ?? DEFAULT_DUPLICATE_OFFSET
-  let snapshot = deriveSnapshot(doc)
+  let projection = readCanvasProjection(doc)
+  let activeSceneId = projection.scenes[0].id
+  let snapshot = deriveSnapshot(projection, activeSceneId)
 
   const undoManager = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('meta')], {
     trackedOrigins: new Set([LOCAL_REACT_FLOW_ORIGIN]),
   })
 
-  const handleUpdate = () => {
-    snapshot = deriveSnapshot(doc)
-    for (const listener of listeners) {
-      listener()
+  const emitSnapshot = () => {
+    for (const listener of listeners) listener()
+  }
+
+  const refreshSnapshot = () => {
+    projection = readCanvasProjection(doc)
+    if (!projection.scenes.some((scene) => scene.id === activeSceneId)) {
+      activeSceneId = projection.scenes[0].id
     }
+    snapshot = deriveSnapshot(projection, activeSceneId)
+    emitSnapshot()
+  }
+
+  const handleUpdate = () => {
+    refreshSnapshot()
   }
 
   doc.on('update', handleUpdate)
 
   const rawMutations: RawBindingMutations = {
     createNode(node) {
-      const activeSceneId = readActiveSceneId(doc)
       upsertNodeRecord(doc, normalizeNode(node, activeSceneId))
     },
 
@@ -143,9 +154,8 @@ export function createReactFlowBinding(
     createScene(name) {
       const nextId = options.createSceneId?.() ?? createSceneId()
       const scenes = readCanvasProjection(doc).scenes
-      const nextScenes = [...scenes, { id: nextId, name: name ?? nextSceneName(scenes) }]
-      setScenesRecord(doc, nextScenes)
-      setActiveSceneRecord(doc, nextId)
+      activeSceneId = nextId
+      setScenesRecord(doc, [...scenes, { id: nextId, name: name ?? nextSceneName(scenes) }])
       return nextId
     },
 
@@ -155,8 +165,8 @@ export function createReactFlowBinding(
     },
 
     switchScene(sceneId) {
-      if (!sceneId) return
-      setActiveSceneRecord(doc, sceneId)
+      if (!readCanvasProjection(doc).scenes.some((scene) => scene.id === sceneId)) return
+      activeSceneId = sceneId
     },
 
     setProjectName(name) {
@@ -186,7 +196,7 @@ export function createReactFlowBinding(
             case 'add': {
               const nextNode = nextNodesById.get(change.item.id)
               if (nextNode) {
-                upsertNodeRecord(doc, normalizeNode(nextNode as NodeInput, readActiveSceneId(doc)))
+                upsertNodeRecord(doc, normalizeNode(nextNode as NodeInput, activeSceneId))
               }
               break
             }
@@ -196,7 +206,7 @@ export function createReactFlowBinding(
             case 'replace': {
               const nextNode = nextNodesById.get(change.id)
               if (nextNode) {
-                upsertNodeRecord(doc, normalizeNode(nextNode as NodeInput, readActiveSceneId(doc)))
+                upsertNodeRecord(doc, normalizeNode(nextNode as NodeInput, activeSceneId))
               }
               break
             }
@@ -333,9 +343,9 @@ export function createReactFlowBinding(
     },
 
     switchScene(sceneId) {
-      runLocalTransaction(doc, () => {
-        rawMutations.switchScene(sceneId)
-      })
+      const previousSceneId = activeSceneId
+      rawMutations.switchScene(sceneId)
+      if (activeSceneId !== previousSceneId) refreshSnapshot()
     },
 
     setProjectName(name) {
@@ -360,7 +370,7 @@ export function createReactFlowBinding(
           idMap.set(node.id, nextId)
           createdIds.push(nextId)
           upsertNodeRecord(doc, {
-            ...normalizeNode(node as NodeInput, readActiveSceneId(doc)),
+            ...normalizeNode(node as NodeInput, activeSceneId),
             id: nextId,
             position: {
               x: node.position.x + duplicateOffset.x,
@@ -406,9 +416,11 @@ export function createReactFlowBinding(
     },
 
     batch(callback) {
-      runLocalTransaction(doc, () => {
-        callback(rawMutations)
-      })
+      const previousSceneId = activeSceneId
+      runLocalTransaction(doc, () => callback(rawMutations))
+      if (activeSceneId !== previousSceneId && snapshot.activeSceneId !== activeSceneId) {
+        refreshSnapshot()
+      }
     },
 
     undo() {
@@ -429,9 +441,10 @@ export function createReactFlowBinding(
   return binding
 }
 
-function deriveSnapshot(doc: Y.Doc): RealtimeCanvasBindingSnapshot {
-  const projection = readCanvasProjection(doc)
-  const activeSceneId = projection.activeSceneId
+function deriveSnapshot(
+  projection: CanvasProjection,
+  activeSceneId: string,
+): RealtimeCanvasBindingSnapshot {
   const allNodes = projection.nodes.map((node) => ({ ...node, data: { ...ensureRecord(node.data) } }))
   const allEdges = projection.edges.map((edge) => ({ ...edge, data: { ...ensureRecord(edge.data) } }))
   const nodes = allNodes.filter((node) => readNodeSceneId(node) === activeSceneId)
@@ -607,14 +620,6 @@ function setScenesRecord(doc: Y.Doc, scenes: CanvasScene[]): void {
   meta.set('scenes', scenes.map((scene) => ({ id: scene.id, name: scene.name })))
 }
 
-function setActiveSceneRecord(doc: Y.Doc, sceneId: string): void {
-  const projection = readCanvasProjection(doc)
-  if (!projection.scenes.some((scene) => scene.id === sceneId)) {
-    return
-  }
-  doc.getMap('meta').set('activeSceneId', sceneId)
-}
-
 function setProjectNameRecord(doc: Y.Doc, name: string): void {
   const projectName = name.trim() || 'Untitled Project'
   if ((readCanvasProjection(doc).projectName ?? 'Untitled Project') !== projectName) {
@@ -643,10 +648,6 @@ function deleteSceneRecord(doc: Y.Doc, sceneId: string): void {
   for (const nodeId of doomedNodeIds) {
     deleteNodeRecord(doc, nodeId)
   }
-}
-
-function readActiveSceneId(doc: Y.Doc): string {
-  return readCanvasProjection(doc).activeSceneId
 }
 
 function readNodeSceneId(node: { data?: unknown }): string | undefined {

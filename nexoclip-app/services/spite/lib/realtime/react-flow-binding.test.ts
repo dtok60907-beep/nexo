@@ -806,3 +806,79 @@ test('realtime room caches one doc/provider per project, refreshes tokens throug
   assert.equal(createdProviders[0].destroyed, true)
 }
 )
+
+test('scene navigation stays local to each binding and emits no Yjs update', () => {
+  const primary = createCanvasDocument()
+  setScenes(primary, [
+    { id: 'scene-1', name: 'Scene 1' },
+    { id: 'scene-2', name: 'Scene 2' },
+  ])
+  // Legacy persisted navigation must not override the first-scene default.
+  setActiveSceneId(primary, 'scene-2')
+  upsertNode(primary, {
+    id: 'scene-1-node',
+    position: { x: 0, y: 0 },
+    data: { sceneId: 'scene-1' },
+  })
+  upsertNode(primary, {
+    id: 'scene-2-node',
+    position: { x: 0, y: 0 },
+    data: { sceneId: 'scene-2' },
+  })
+
+  const replica = new Y.Doc()
+  Y.applyUpdate(replica, Y.encodeStateAsUpdate(primary))
+  const first = createReactFlowBinding(primary)
+  const second = createReactFlowBinding(replica)
+  let primaryUpdates = 0
+  primary.on('update', () => { primaryUpdates += 1 })
+
+  first.switchScene('scene-2')
+
+  assert.equal(first.getSnapshot().activeSceneId, 'scene-2')
+  assert.deepEqual(first.getSnapshot().nodes.map((node) => node.id), ['scene-2-node'])
+  assert.equal(second.getSnapshot().activeSceneId, 'scene-1')
+  assert.deepEqual(second.getSnapshot().nodes.map((node) => node.id), ['scene-1-node'])
+  assert.equal(primaryUpdates, 0)
+
+  first.destroy()
+  second.destroy()
+})
+
+test('shared scene mutations preserve valid remote selection and fall back after deletion', () => {
+  const primary = createCanvasDocument()
+  setScenes(primary, [
+    { id: 'scene-1', name: 'Scene 1' },
+    { id: 'scene-2', name: 'Scene 2' },
+  ])
+  const replica = new Y.Doc()
+  Y.applyUpdate(replica, Y.encodeStateAsUpdate(primary))
+  const first = createReactFlowBinding(primary, { createSceneId: () => 'scene-3' })
+  const second = createReactFlowBinding(replica)
+
+  second.switchScene('scene-2')
+  // Make the legacy shared switch causally precede scene creation so this
+  // regression is deterministic instead of depending on Yjs client IDs.
+  Y.applyUpdate(primary, Y.encodeStateAsUpdate(replica), 'remote-sync')
+  const createUpdate = captureUpdate(primary, () => {
+    assert.equal(first.createScene('Scene 3'), 'scene-3')
+  })
+  Y.applyUpdate(replica, createUpdate, 'remote-sync')
+
+  assert.equal(first.getSnapshot().activeSceneId, 'scene-3')
+  assert.equal(second.getSnapshot().activeSceneId, 'scene-2')
+  assert.deepEqual(second.getSnapshot().scenes.map((scene) => scene.id), [
+    'scene-1',
+    'scene-2',
+    'scene-3',
+  ])
+
+  const deleteUpdate = captureUpdate(primary, () => first.deleteScene('scene-2'))
+  Y.applyUpdate(replica, deleteUpdate, 'remote-sync')
+
+  assert.equal(first.getSnapshot().activeSceneId, 'scene-3')
+  assert.equal(second.getSnapshot().activeSceneId, 'scene-1')
+
+  first.destroy()
+  second.destroy()
+})
