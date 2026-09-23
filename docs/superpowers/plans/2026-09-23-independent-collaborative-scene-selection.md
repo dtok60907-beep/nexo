@@ -93,6 +93,9 @@ test('shared scene mutations preserve valid remote selection and fall back after
   const second = createReactFlowBinding(replica)
 
   second.switchScene('scene-2')
+  // Make the legacy shared switch causally precede scene creation so this
+  // regression is deterministic instead of depending on Yjs client IDs.
+  Y.applyUpdate(primary, Y.encodeStateAsUpdate(replica), 'remote-sync')
   const createUpdate = captureUpdate(primary, () => {
     assert.equal(first.createScene('Scene 3'), 'scene-3')
   })
