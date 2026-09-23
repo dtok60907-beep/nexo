@@ -807,6 +807,25 @@ test('realtime room caches one doc/provider per project, refreshes tokens throug
 }
 )
 
+test('binding adopts the first authoritative scene when an empty document hydrates', () => {
+  const persisted = createCanvasDocument()
+  setScenes(persisted, [
+    { id: 'scene-2', name: 'Scene 2' },
+    { id: 'scene-1', name: 'Scene 1' },
+  ])
+  const client = new Y.Doc()
+  const binding = createReactFlowBinding(client)
+
+  assert.equal(binding.getSnapshot().activeSceneId, 'scene-1')
+  Y.applyUpdate(client, Y.encodeStateAsUpdate(persisted), 'initial-sync')
+
+  const hydrated = binding.getSnapshot()
+  assert.deepEqual(hydrated.scenes.map((scene) => scene.id), ['scene-2', 'scene-1'])
+  assert.equal(hydrated.activeSceneId, 'scene-2')
+
+  binding.destroy()
+})
+
 test('scene navigation stays local to each binding and emits no Yjs update', () => {
   const primary = createCanvasDocument()
   setScenes(primary, [

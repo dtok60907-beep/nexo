@@ -594,10 +594,9 @@ function CanvasInner({ projectId }: { projectId: string }) {
   // that sceneId, and every edge between those nodes. The durable
   // realtime runtime persists and projects those deletions.
   //
-  // If the active scene is being deleted, switch to the previous scene
-  // in the list (or the first one if we're deleting the first scene)
-  // before the removal so the user isn't left looking at an empty
-  // canvas with no active sceneId.
+  // If the active scene is being deleted, fall back to the first
+  // remaining scene so the user isn't left looking at an empty canvas
+  // with no active sceneId.
   const handleDeleteScene = useCallback((sceneId: string) => {
     if (!allowDocumentMutation) return
     commands.deleteScene(sceneId)

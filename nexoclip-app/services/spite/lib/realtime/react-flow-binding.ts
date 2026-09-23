@@ -97,6 +97,7 @@ export function createReactFlowBinding(
   const duplicateOffset = options.duplicateOffset ?? DEFAULT_DUPLICATE_OFFSET
   let projection = readCanvasProjection(doc)
   let activeSceneId = projection.scenes[0].id
+  let hasInitializedActiveScene = doc.getMap('meta').has('scenes')
   let snapshot = deriveSnapshot(projection, activeSceneId)
 
   const undoManager = new Y.UndoManager([doc.getMap('nodes'), doc.getMap('edges'), doc.getMap('meta')], {
@@ -109,7 +110,10 @@ export function createReactFlowBinding(
 
   const refreshSnapshot = () => {
     projection = readCanvasProjection(doc)
-    if (!projection.scenes.some((scene) => scene.id === activeSceneId)) {
+    if (!hasInitializedActiveScene && doc.getMap('meta').has('scenes')) {
+      activeSceneId = projection.scenes[0].id
+      hasInitializedActiveScene = true
+    } else if (!projection.scenes.some((scene) => scene.id === activeSceneId)) {
       activeSceneId = projection.scenes[0].id
     }
     snapshot = deriveSnapshot(projection, activeSceneId)
@@ -155,6 +159,7 @@ export function createReactFlowBinding(
       const nextId = options.createSceneId?.() ?? createSceneId()
       const scenes = readCanvasProjection(doc).scenes
       activeSceneId = nextId
+      hasInitializedActiveScene = true
       setScenesRecord(doc, [...scenes, { id: nextId, name: name ?? nextSceneName(scenes) }])
       return nextId
     },
@@ -167,6 +172,7 @@ export function createReactFlowBinding(
     switchScene(sceneId) {
       if (!readCanvasProjection(doc).scenes.some((scene) => scene.id === sceneId)) return
       activeSceneId = sceneId
+      hasInitializedActiveScene = true
     },
 
     setProjectName(name) {
